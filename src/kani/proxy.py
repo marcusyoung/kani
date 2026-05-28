@@ -588,7 +588,14 @@ async def _proxy_upstream(
                     f"Upstream error: {resp.text[:500]}",
                     "upstream_error",
                 )
-            resp_data = resp.json()
+            try:
+                resp_data = resp.json()
+            except Exception:
+                return _openai_error(
+                    resp.status_code,
+                    f"Upstream returned non-JSON: {resp.text[:500]}",
+                    "upstream_error",
+                )
             successful_failure = _parse_successful_failure(resp_data)
             if successful_failure is not None:
                 status_code, message, error_type = successful_failure
@@ -787,16 +794,22 @@ async def _try_with_fallbacks(
         fb_body["model"] = fb.model
         # Restyle for fallback provider (do not reuse primary provider's reasoning shape)
         if decision.reasoning_effort:
-            fb_style = _get_reasoning_style_for_provider(fb.provider, runtime)
+            fb_style = _get_reasoning_style_for_candidate(
+                fb.model, fb.provider, runtime
+            )
+            fb_normalized_effort = _normalize_reasoning_effort(
+                fb_style, decision.reasoning_effort
+            )
             fb_body = _apply_reasoning_for_style(
                 fb_body, fb_style, effort=decision.reasoning_effort
             )
             logger.info(
-                "REASONING_CONTROL injected (fallback) request_id=%s tier=%s style=%s effort=%s provider=%s",
+                "REASONING_CONTROL injected (fallback) request_id=%s tier=%s style=%s original_effort=%s normalized_effort=%s provider=%s",
                 request_id,
                 decision.tier,
                 fb_style,
                 decision.reasoning_effort,
+                fb_normalized_effort,
                 fb.provider,
             )
         result = await _proxy_upstream(
@@ -831,20 +844,52 @@ async def _try_with_fallbacks(
 # ── Reasoning control injection helpers ───────────────────────────────────────
 
 
-def _get_reasoning_style(decision: RoutingDecision, runtime: RuntimeState) -> str:
+def _get_model_reasoning_style(
+    model: str, provider_name: str, runtime: RuntimeState
+) -> str | None:
+    """Return model-specific reasoning_style override using prefix/provider matching."""
+    best_style: str | None = None
+    best_score: tuple[int, int] = (-1, -1)
+    for entry in runtime.config.model_rules:
+        prefix_matches = entry.prefix == "*" or model.startswith(entry.prefix)
+        if not prefix_matches:
+            continue
+        if entry.provider and entry.provider != provider_name:
+            continue
+        if not entry.reasoning_style:
+            continue
+        score = (
+            1 if entry.provider else 0,
+            0 if entry.prefix == "*" else len(entry.prefix),
+        )
+        if score > best_score:
+            best_score = score
+            best_style = entry.reasoning_style
+    return best_style
+
+
+def _get_provider_reasoning_style(provider_name: str, runtime: RuntimeState) -> str:
     """Return provider reasoning_style or default 'openai'."""
-    provider_cfg = runtime.config.providers.get(decision.provider)
-    if provider_cfg and hasattr(provider_cfg, "reasoning_style"):
-        return provider_cfg.reasoning_style  # type: ignore[attr-defined]
-    return "openai"
-
-
-def _get_reasoning_style_for_provider(provider_name: str, runtime: RuntimeState) -> str:
-    """Return reasoning_style for arbitrary provider name (used in fallback)."""
     provider_cfg = runtime.config.providers.get(provider_name)
     if provider_cfg and hasattr(provider_cfg, "reasoning_style"):
         return provider_cfg.reasoning_style  # type: ignore[attr-defined]
     return "openai"
+
+
+def _get_reasoning_style(decision: RoutingDecision, runtime: RuntimeState) -> str:
+    """Return model override reasoning_style, then provider reasoning_style."""
+    return _get_model_reasoning_style(
+        decision.model, decision.provider, runtime
+    ) or _get_provider_reasoning_style(decision.provider, runtime)
+
+
+def _get_reasoning_style_for_candidate(
+    model: str, provider_name: str, runtime: RuntimeState
+) -> str:
+    """Return reasoning_style for arbitrary model/provider candidate."""
+    return _get_model_reasoning_style(
+        model, provider_name, runtime
+    ) or _get_provider_reasoning_style(provider_name, runtime)
 
 
 def _has_explicit_reasoning_control(body: dict[str, Any]) -> bool:
@@ -866,6 +911,46 @@ def _has_explicit_reasoning_control(body: dict[str, Any]) -> bool:
     return False
 
 
+def _normalize_reasoning_effort(style: str, effort: str) -> str:
+    """Normalize effort labels to values supported by each reasoning_style."""
+    normalized = effort.strip().lower()
+    aliases = {
+        "off": "none",
+        "false": "none",
+        "0": "none",
+        "highx": "xhigh",
+        "extra-high": "xhigh",
+        "extra_high": "xhigh",
+    }
+    normalized = aliases.get(normalized, normalized)
+
+    allowed_by_style = {
+        "openai": {"none", "low", "medium", "high"},
+        "xai": {"none", "low", "medium", "high"},
+        "anthropic": {"low", "medium", "high", "xhigh", "max"},
+        "dashscope": {"none", "low", "medium", "high"},
+        "gemini": {"none", "low", "medium", "high", "xhigh", "max"},
+    }
+    allowed = allowed_by_style.get(style, {"low", "medium", "high"})
+    if normalized in allowed:
+        return normalized
+    if normalized in {"xhigh", "max"}:
+        return "high"
+    return "medium"
+
+
+def _gemini_thinking_budget(effort: str) -> int:
+    """Map normalized effort labels to Gemini thinking budgets."""
+    return {
+        "none": 0,
+        "low": 1024,
+        "medium": 8192,
+        "high": 24576,
+        "xhigh": 32768,
+        "max": 32768,
+    }.get(effort, 8192)
+
+
 def _apply_reasoning_for_style(
     body: dict[str, Any],
     style: str,
@@ -879,20 +964,25 @@ def _apply_reasoning_for_style(
         return body
     if _has_explicit_reasoning_control(body):
         return body
+    normalized_effort = _normalize_reasoning_effort(style, effort)
     if style == "openai":
-        body.setdefault("reasoning", {"effort": effort})
+        body.setdefault("reasoning", {"effort": normalized_effort})
+    elif style == "xai":
+        body.setdefault("reasoning_effort", normalized_effort)
     elif style == "anthropic":
         oc = body.setdefault("output_config", {})
         if isinstance(oc, dict):
-            oc.setdefault("effort", effort)
+            oc.setdefault("effort", normalized_effort)
     elif style == "dashscope":
-        body.setdefault("enable_thinking", True)
+        body.setdefault("enable_thinking", normalized_effort != "none")
     elif style == "gemini":
         gc = body.setdefault("generationConfig", {})
         if isinstance(gc, dict):
             tc = gc.setdefault("thinkingConfig", {})
             if isinstance(tc, dict):
-                tc.setdefault("thinkingBudget", 8192)
+                tc.setdefault(
+                    "thinkingBudget", _gemini_thinking_budget(normalized_effort)
+                )
     return body
 
 
@@ -1359,15 +1449,19 @@ async def chat_completions(request: Request):
         # (preserve explicit client controls)
         if decision.reasoning_effort:
             style = _get_reasoning_style(decision, state)
+            normalized_effort = _normalize_reasoning_effort(
+                style, decision.reasoning_effort
+            )
             body = _apply_reasoning_for_style(
                 body, style, effort=decision.reasoning_effort
             )
             logger.info(
-                "REASONING_CONTROL injected request_id=%s tier=%s style=%s effort=%s provider=%s",
+                "REASONING_CONTROL injected request_id=%s tier=%s style=%s original_effort=%s normalized_effort=%s provider=%s",
                 request_id,
                 decision.tier,
                 style,
                 decision.reasoning_effort,
+                normalized_effort,
                 decision.provider,
             )
 

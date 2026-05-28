@@ -73,9 +73,9 @@ class ProviderConfig(BaseModel):
     base_url: str  # e.g. 'https://openrouter.ai/api/v1'
     api_key: str = ""  # can reference env var with ${ENV_VAR}
     models: list[str] = Field(default_factory=list)  # optional model whitelist
-    reasoning_style: Literal["openai", "anthropic", "dashscope", "gemini", "none"] = (
-        "openai"
-    )
+    reasoning_style: Literal[
+        "openai", "xai", "anthropic", "dashscope", "gemini", "none"
+    ] = "openai"
 
 
 class ModelEntry(BaseModel):
@@ -263,13 +263,20 @@ class SmartProxyConfig(BaseModel):
     )
 
 
-class ModelCapabilityEntry(BaseModel):
-    """Model capability declaration using prefix-based matching."""
+class ModelRuleEntry(BaseModel):
+    """Model rule declaration using prefix matching."""
 
     prefix: str  # e.g. 'claude-', 'gpt-4', 'google/gemini'
+    provider: str = ""  # optional provider filter; empty matches any provider
     capabilities: list[str] = Field(
         default_factory=list
     )  # e.g. ['vision', 'tools', 'json_mode']
+    reasoning_style: (
+        Literal["openai", "xai", "anthropic", "dashscope", "gemini", "none"] | None
+    ) = None
+
+
+ModelCapabilityEntry = ModelRuleEntry
 
 
 def _resolve_provider_for_aux_llm(
@@ -312,7 +319,15 @@ class KaniConfig(BaseModel):
     feature_annotator: FeatureAnnotatorConfig | None = None
     embedding: EmbeddingConfig | None = None
     smart_proxy: SmartProxyConfig = Field(default_factory=SmartProxyConfig)
-    model_capabilities: list[ModelCapabilityEntry] = Field(default_factory=list)
+    model_rules: list[ModelRuleEntry] = Field(default_factory=list)
+    model_capabilities: list[ModelRuleEntry] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _normalize_legacy_model_capabilities(self) -> "KaniConfig":
+        """Use legacy model_capabilities as model_rules when model_rules is unset."""
+        if not self.model_rules and self.model_capabilities:
+            self.model_rules = self.model_capabilities
+        return self
 
     @model_validator(mode="after")
     def _validate_aux_llm_provider_resolution(self) -> "KaniConfig":

@@ -168,7 +168,9 @@ class Router:
         # Try to find capable model in current tier, escalate if needed
         primary_candidates = tier_cfg.resolve_primary_candidates()
         capable_candidates = self._filter_capable_candidates(
-            primary_candidates, required_capabilities
+            primary_candidates,
+            required_capabilities,
+            tier_provider=tier_cfg.provider,
         )
 
         # If no capable candidates in current tier, escalate to higher tiers
@@ -180,7 +182,9 @@ class Router:
                     continue
                 escalated_candidates = escalated_cfg.resolve_primary_candidates()
                 capable_candidates = self._filter_capable_candidates(
-                    escalated_candidates, required_capabilities
+                    escalated_candidates,
+                    required_capabilities,
+                    tier_provider=escalated_cfg.provider,
                 )
                 if capable_candidates:
                     resolved_tier = tier_name
@@ -201,7 +205,9 @@ class Router:
 
         fallback_candidates = tier_cfg.resolve_fallbacks()
         capable_fallbacks = self._filter_capable_candidates(
-            fallback_candidates, required_capabilities
+            fallback_candidates,
+            required_capabilities,
+            tier_provider=tier_cfg.provider,
         )
         cooled_fallback_candidates = self._filter_cooled_candidates(
             capable_fallbacks,
@@ -379,22 +385,38 @@ class Router:
     # Internals
     # ------------------------------------------------------------------
 
-    def _get_model_capabilities(self, model_id: str) -> set[str]:
-        """Get capabilities for a model using prefix matching from config.
+    def _get_model_capabilities(
+        self, model_id: str, provider_name: str = ""
+    ) -> set[str]:
+        """Get capabilities for a model using prefix/provider matching from config.
 
         Returns:
             Set of capability strings (e.g., {'vision', 'tools', 'json_mode'}).
             Empty set if model not found in config.
         """
-        for entry in self.config.model_capabilities:
-            if model_id.startswith(entry.prefix):
-                return set(entry.capabilities)
-        return set()
+        best_capabilities: list[str] | None = None
+        best_score: tuple[int, int] = (-1, -1)
+        for entry in self.config.model_rules:
+            prefix_matches = entry.prefix == "*" or model_id.startswith(entry.prefix)
+            if not prefix_matches:
+                continue
+            if entry.provider and entry.provider != provider_name:
+                continue
+            score = (
+                1 if entry.provider else 0,
+                0 if entry.prefix == "*" else len(entry.prefix),
+            )
+            if score > best_score:
+                best_score = score
+                best_capabilities = entry.capabilities
+        return set(best_capabilities or [])
 
     def _filter_capable_candidates(
         self,
         candidates: list[tuple[str, str]],
         required_capabilities: set[str],
+        *,
+        tier_provider: str = "default",
     ) -> list[tuple[str, str]]:
         """Filter candidates to those that have all required capabilities.
 
@@ -411,7 +433,10 @@ class Router:
 
         capable = []
         for model_id, provider_name in candidates:
-            model_caps = self._get_model_capabilities(model_id)
+            resolved_provider = self._resolve_provider_name(
+                provider_name, tier_provider
+            )
+            model_caps = self._get_model_capabilities(model_id, resolved_provider)
             if required_capabilities.issubset(model_caps):
                 capable.append((model_id, provider_name))
 

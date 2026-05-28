@@ -179,6 +179,7 @@ class FeatureAnnotatorConfig(_AuxLLMConfigBase):
 class EmbeddingConfig(BaseModel):
     """Configuration for embedding API used by training and scoring."""
 
+    enabled: bool = True
     model: str = "text-embedding-3-small"
     provider: str = ""
     base_url: str = ""
@@ -386,7 +387,7 @@ class KaniConfig(BaseModel):
     def embedding_resolved(self) -> tuple[str, str] | None:
         """Return (base_url, api_key) resolved from embedding.provider/default_provider."""
 
-        if self.embedding is None:
+        if self.embedding is None or not self.embedding.enabled:
             return None
         if self.embedding.base_url:
             return self.embedding.base_url, self.embedding.api_key

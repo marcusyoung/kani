@@ -98,6 +98,8 @@ def build_embedding_client() -> tuple[OpenAI, str]:
         pass
 
     if loaded and cfg:
+        if not cfg.enabled:
+            raise RuntimeError("Embedding disabled by config")
         resolved = loaded.embedding_resolved()
         if resolved is not None:
             base_url, api_key = resolved

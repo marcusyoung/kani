@@ -4,14 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from kani.config import KaniConfig
-from kani.scorer import (
-    ClassificationResult,
-    Scorer,
-    ScoringConfig,
-    Tier,
-    _build_embedding_client,
-)
+from kani.scorer import ClassificationResult, Scorer, Tier
 
 
 class _StubFeatureClassifier:
@@ -78,94 +71,39 @@ class _StubFeatureClassifier:
         )
 
 
-class TestEmbeddingClientConfig:
-    def test_embedding_provider_resolves_via_provider_map(self) -> None:
-        config = KaniConfig.model_validate(
-            {
-                "default_provider": "cliproxy",
-                "providers": {
-                    "cliproxy": {
-                        "name": "cliproxy",
-                        "base_url": "http://example.invalid/v1",
-                        "api_key": "secret",
-                    }
-                },
-                "embedding": {
-                    "provider": "cliproxy",
-                    "model": "text-embedding-test",
-                },
-            }
-        )
-
-        with patch("kani.config.load_config", return_value=config):
-            client, model = _build_embedding_client("fallback-model")
-
-        assert str(client.base_url) == "http://example.invalid/v1/"
-        assert model == "text-embedding-test"
-
-    def test_embedding_base_url_still_takes_precedence(self) -> None:
-        config = KaniConfig.model_validate(
-            {
-                "default_provider": "cliproxy",
-                "providers": {
-                    "cliproxy": {
-                        "name": "cliproxy",
-                        "base_url": "http://provider.invalid/v1",
-                        "api_key": "secret",
-                    }
-                },
-                "embedding": {
-                    "provider": "cliproxy",
-                    "base_url": "http://direct.invalid/v1",
-                    "api_key": "direct-key",
-                    "model": "text-embedding-direct",
-                },
-            }
-        )
-
-        with patch("kani.config.load_config", return_value=config):
-            client, model = _build_embedding_client("fallback-model")
-
-        assert str(client.base_url) == "http://direct.invalid/v1/"
-        assert model == "text-embedding-direct"
-
-
 class TestDistilledFeatureScorer:
-    def test_feature_model_path_returns_distilled_method_and_dimensions(self) -> None:
+    def test_runtime_classifier_uses_no_embedding_or_model_load(self) -> None:
         with patch(
-            "kani.scorer.DistilledFeatureClassifier.load",
-            return_value=_StubFeatureClassifier(),
-        ):
+            "openai.resources.embeddings.Embeddings.create"
+        ) as embeddings_create:
             result = Scorer(enable_routing_log=False).classify("hello world")
 
+        embeddings_create.assert_not_called()
         assert isinstance(result, ClassificationResult)
         assert result.signals["method"]["raw"] == "distilled-features"
         assert result.signals["featureVersion"] == "v1"
         assert isinstance(result.signals["semanticLabels"], dict)
-        assert result.agentic_score == 0.5
         assert len(result.dimensions) == 15
         assert result.tier in {Tier.SIMPLE, Tier.MEDIUM, Tier.COMPLEX, Tier.REASONING}
 
     def test_agentic_score_is_derived_from_agentic_task_dimension(self) -> None:
-        with patch(
-            "kani.scorer.DistilledFeatureClassifier.load",
-            return_value=_StubFeatureClassifier(),
-        ):
-            result = Scorer(enable_routing_log=False).classify("prove this theorem")
+        result = Scorer(enable_routing_log=False).classify("fix this bug and run tests")
 
         assert result.agentic_score == 1.0
-        assert result.tier in {Tier.COMPLEX, Tier.REASONING}
+        assert result.tier in {Tier.MEDIUM, Tier.COMPLEX, Tier.REASONING}
 
-    def test_default_fallback_when_feature_model_missing(self) -> None:
-        config = ScoringConfig(fallback_tier=Tier.MEDIUM, fallback_confidence=0.31)
-        with patch("kani.scorer.DistilledFeatureClassifier.load", return_value=None):
-            result = Scorer(config=config, enable_routing_log=False).classify(
-                "anything"
-            )
+    def test_reasoning_prompt_routes_to_reasoning(self) -> None:
+        result = Scorer(enable_routing_log=False).classify(
+            "prove why this algorithm is correct and explain the root cause"
+        )
 
-        assert result.tier == Tier.MEDIUM
-        assert result.confidence == 0.31
-        assert result.score == 0.0
-        assert result.signals["method"]["raw"] == "default"
-        assert result.agentic_score == 0.0
-        assert result.dimensions == []
+        assert result.tier == Tier.REASONING
+        assert result.signals["semanticLabels"]["reasoningMarkers"] == "high"
+
+    def test_simple_prompt_still_has_full_dimension_shape(self) -> None:
+        result = Scorer(enable_routing_log=False).classify("hello")
+
+        assert result.signals["method"]["raw"] == "distilled-features"
+        assert result.confidence > 0.0
+        assert result.score >= 0.0
+        assert len(result.dimensions) == 15

@@ -786,9 +786,19 @@ async def _try_with_fallbacks(
         fb_body = dict(body)
         fb_body["model"] = fb.model
         # Restyle for fallback provider (do not reuse primary provider's reasoning shape)
-        if decision.tier == "REASONING":
+        if decision.reasoning_effort:
             fb_style = _get_reasoning_style_for_provider(fb.provider, runtime)
-            fb_body = _apply_reasoning_for_style(fb_body, fb_style)
+            fb_body = _apply_reasoning_for_style(
+                fb_body, fb_style, effort=decision.reasoning_effort
+            )
+            logger.info(
+                "REASONING_CONTROL injected (fallback) request_id=%s tier=%s style=%s effort=%s provider=%s",
+                request_id,
+                decision.tier,
+                fb_style,
+                decision.reasoning_effort,
+                fb.provider,
+            )
         result = await _proxy_upstream(
             fb.base_url.rstrip("/"),
             fb.api_key or "",
@@ -1345,10 +1355,21 @@ async def chat_completions(request: Request):
         # Replace the model field with the actual model name
         body["model"] = decision.model
 
-        # Inject provider-specific reasoning control for REASONING tier (preserve explicit client controls)
-        if decision.tier == "REASONING":
+        # Inject provider-specific reasoning control if tier has reasoning_effort set
+        # (preserve explicit client controls)
+        if decision.reasoning_effort:
             style = _get_reasoning_style(decision, state)
-            body = _apply_reasoning_for_style(body, style)
+            body = _apply_reasoning_for_style(
+                body, style, effort=decision.reasoning_effort
+            )
+            logger.info(
+                "REASONING_CONTROL injected request_id=%s tier=%s style=%s effort=%s provider=%s",
+                request_id,
+                decision.tier,
+                style,
+                decision.reasoning_effort,
+                decision.provider,
+            )
 
         response = await _try_with_fallbacks(
             body,

@@ -91,6 +91,9 @@ class TierModelConfig(BaseModel):
     primary: str | ModelEntry | list[str | ModelEntry]
     fallback: list[str | ModelEntry] = Field(default_factory=list)
     provider: str = "default"  # tier-level default provider
+    reasoning_effort: str | None = (
+        None  # low | medium | high | none (tier-level override)
+    )
 
     @model_validator(mode="after")
     def _validate_primary_not_empty(self) -> "TierModelConfig":

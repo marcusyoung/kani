@@ -60,6 +60,7 @@ class RoutingDecision(BaseModel):
     profile: str | None = None
     fallbacks: list[FallbackEntry] = Field(default_factory=list)
     required_capabilities: list[str] = Field(default_factory=list)
+    reasoning_effort: str | None = None  # tier-level reasoning effort override
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +293,7 @@ class Router:
             profile=profile,
             fallbacks=fallback_entries,
             required_capabilities=sorted(list(required_capabilities)),
+            reasoning_effort=tier_cfg.reasoning_effort,
         )
 
     def resolve_model(
@@ -370,6 +372,7 @@ class Router:
             agentic_score=0.0,
             profile=resolved_profile,
             fallbacks=fallback_entries,
+            reasoning_effort=tier_cfg.reasoning_effort,
         )
 
     # ------------------------------------------------------------------

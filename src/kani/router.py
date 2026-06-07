@@ -176,14 +176,14 @@ class Router:
         primary_candidates = self._eligible_primary_candidates(
             tier_cfg,
             required_capabilities,
-            messages=messages,
+            prompt_tokens=prompt_tokens,
         )
 
         # If no eligible primary in current tier, try fallbacks before escalating.
         fallback_candidates = self._eligible_fallback_candidates(
             tier_cfg,
             required_capabilities,
-            messages=messages,
+            prompt_tokens=prompt_tokens,
         )
 
         if not primary_candidates and not fallback_candidates:

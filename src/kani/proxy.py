@@ -58,6 +58,7 @@ from kani.fallback_backoff import FallbackBackoffState
 from kani.router import (
     CapabilityNotSatisfiedError,
     FallbackEntry,
+    InputLimitNotSatisfiedError,
     Router,
     RoutingDecision,
 )
@@ -1421,6 +1422,16 @@ async def chat_completions(request: Request):
                 f"No available model supports required capabilities: {', '.join(sorted(required_capabilities))}",
                 "capability_not_satisfied",
             )
+        except InputLimitNotSatisfiedError as exc:
+            logger.warning(
+                "Input limit not satisfied request_id=%s profile=%s tier=%s prompt_tokens=%d state_version=%d",
+                request_id,
+                exc.profile,
+                exc.tier,
+                exc.prompt_tokens,
+                state.version,
+            )
+            return _openai_error(400, str(exc), "input_limit_not_satisfied")
         except Exception as exc:
             logger.exception(
                 "Router error request_id=%s profile=%s state_version=%d",
@@ -1712,6 +1723,15 @@ async def route_debug(request: Request):
 
     try:
         decision = state.router.route(messages, profile=profile)
+    except InputLimitNotSatisfiedError as exc:
+        logger.warning(
+            "Input limit not satisfied in debug endpoint profile=%s tier=%s prompt_tokens=%d state_version=%d",
+            exc.profile,
+            exc.tier,
+            exc.prompt_tokens,
+            state.version,
+        )
+        return _openai_error(400, str(exc), "input_limit_not_satisfied")
     except Exception as exc:
         logger.exception(
             "Router error in debug endpoint profile=%s state_version=%d",

@@ -32,6 +32,20 @@ class CapabilityNotSatisfiedError(Exception):
         )
 
 
+class InputLimitNotSatisfiedError(Exception):
+    """Raised when no candidate can safely accept the estimated prompt tokens."""
+
+    def __init__(self, prompt_tokens: int, profile: str, tier: str) -> None:
+        self.prompt_tokens = prompt_tokens
+        self.profile = profile
+        self.tier = tier
+        super().__init__(
+            "No input-limit-eligible model candidate is available "
+            f"for profile '{profile}' tier '{tier}' with estimated prompt tokens "
+            f"{prompt_tokens}."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Routing result
 # ---------------------------------------------------------------------------
@@ -244,18 +258,18 @@ class Router:
             promoted_from_fallback = True
             selection_candidates = fallback_candidates
             log.warning(
-                "All fallback candidates cooling down; ignoring cooldown profile=%s tier=%s",
+                "All input-limit-eligible fallback candidates cooling down; ignoring cooldown profile=%s tier=%s",
                 profile,
                 resolved_tier,
             )
         else:
-            selection_candidates = tier_cfg.resolve_primary_candidate_entries()
             log.warning(
-                "No input-limit-eligible candidates found; falling back to existing upstream handling profile=%s tier=%s prompt_tokens=%d",
+                "No input-limit-eligible candidates found profile=%s tier=%s prompt_tokens=%d",
                 profile,
                 resolved_tier,
                 prompt_tokens,
             )
+            raise InputLimitNotSatisfiedError(prompt_tokens, profile, resolved_tier)
 
         # --- Resolve primary model and provider ---
         primary_candidate = self._select_primary_candidate(

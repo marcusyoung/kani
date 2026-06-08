@@ -14,7 +14,7 @@ from kani.config import (
     TierModelConfig,
 )
 from kani.fallback_backoff import FallbackBackoffState
-from kani.router import Router
+from kani.router import InputLimitNotSatisfiedError, Router
 
 
 def _messages(tokenish_length: int = 160) -> list[dict[str, str]]:
@@ -274,3 +274,49 @@ class TestInputLimitRouting:
         decision = router.route(_messages(), profile="auto")
 
         assert decision.model == "large-ready"
+
+    def test_raises_when_all_known_limit_candidates_are_over_limit(self) -> None:
+        cfg = _config(
+            tiers={
+                "MEDIUM": TierModelConfig(
+                    primary=[{"model": "small-primary", "max_input_tokens": 4}],
+                    fallback=[{"model": "small-fallback", "max_input_tokens": 4}],
+                ),
+                "COMPLEX": TierModelConfig(
+                    primary=[{"model": "small-complex", "max_input_tokens": 4}]
+                ),
+            }
+        )
+        router = Router(cfg)
+        _force_tier(router, "MEDIUM")
+
+        with pytest.raises(InputLimitNotSatisfiedError) as exc_info:
+            router.route(_messages(), profile="auto")
+
+        assert exc_info.value.prompt_tokens > 4
+        assert exc_info.value.profile == "auto"
+        assert exc_info.value.tier == "MEDIUM"
+
+    def test_cooldown_ignore_never_reintroduces_over_limit_candidate(self) -> None:
+        cfg = _config(
+            tiers=_all_tiers(
+                "unused",
+                MEDIUM=TierModelConfig(
+                    primary=[
+                        {"model": "small", "max_input_tokens": 4},
+                        {"model": "large-cooled", "max_input_tokens": 99999},
+                    ],
+                ),
+            )
+        )
+        state = FallbackBackoffState(
+            cfg.smart_proxy.fallback_backoff.model_copy(update={"enabled": True})
+        )
+        state.record_retryable_failure("large-cooled", "default")
+        router = Router(cfg, fallback_backoff_state=state)
+        _force_tier(router, "MEDIUM")
+
+        decision = router.route(_messages(), profile="auto")
+
+        assert decision.model == "large-cooled"
+        assert decision.model != "small"

@@ -86,7 +86,7 @@ YAML 設定ファイルの読み込み、環境変数プレースホルダーの
 
 ### Requirement: 設定スキーマ
 
-設定は以下の構造に従わなければならない (SHALL)。Profile tier model entries MAY include optional context-window metadata for routing-time candidate filtering.
+設定は以下の構造に従わなければならない (SHALL)。Profile tier model entries MAY include optional `max_input_tokens` metadata for routing-time input-limit candidate filtering.
 
 #### Scenario: トップレベル設定
 

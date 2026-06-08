@@ -22,6 +22,7 @@ def _config_text(
     compaction_enabled: bool = False,
     compaction_concurrency: int = 2,
     fallback_backoff_enabled: bool = False,
+    input_limit_too_small: bool = False,
 ) -> str:
 
     alt_profile = ""
@@ -63,6 +64,28 @@ def _config_text(
     if smart_proxy_sections:
         smart_proxy = "smart_proxy:\n" + "".join(smart_proxy_sections)
 
+    auto_simple = 'primary: "auto-simple", fallback: [], provider: default'
+    auto_medium = 'primary: "auto-medium", fallback: [], provider: default'
+    auto_complex = 'primary: "auto-complex", fallback: [], provider: default'
+    auto_reason = 'primary: "auto-reason", fallback: [], provider: default'
+    if input_limit_too_small:
+        auto_simple = (
+            'primary: [{model: "tiny-simple", max_input_tokens: 1}], '
+            "fallback: [], provider: default"
+        )
+        auto_medium = (
+            'primary: [{model: "tiny-medium", max_input_tokens: 1}], '
+            "fallback: [], provider: default"
+        )
+        auto_complex = (
+            'primary: [{model: "tiny-complex", max_input_tokens: 1}], '
+            "fallback: [], provider: default"
+        )
+        auto_reason = (
+            'primary: [{model: "tiny-reason", max_input_tokens: 1}], '
+            "fallback: [], provider: default"
+        )
+
     return f"""
 host: \"{host}\"
 port: {port}
@@ -76,10 +99,10 @@ providers:
 profiles:
   auto:
     tiers:
-      SIMPLE: {{primary: \"auto-simple\", fallback: [], provider: default}}
-      MEDIUM: {{primary: \"auto-medium\", fallback: [], provider: default}}
-      COMPLEX: {{primary: \"auto-complex\", fallback: [], provider: default}}
-      REASONING: {{primary: \"auto-reason\", fallback: [], provider: default}}
+      SIMPLE: {{{auto_simple}}}
+      MEDIUM: {{{auto_medium}}}
+      COMPLEX: {{{auto_complex}}}
+      REASONING: {{{auto_reason}}}
 {alt_profile}
 {smart_proxy}
 """
@@ -132,6 +155,29 @@ class TestAdminReloadAuth:
 
         assert resp.status_code == 403
         assert "invalid admin bearer token" in resp.text.lower()
+
+
+class TestProxyRoutingErrors:
+    def test_chat_completions_returns_structured_input_limit_error(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "config.yaml"
+        path.write_text(_config_text(input_limit_too_small=True))
+        configure(str(path))
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "kani/auto",
+                    "messages": [{"role": "user", "content": "hello world"}],
+                },
+            )
+
+        assert resp.status_code == 400
+        payload = resp.json()
+        assert payload["error"]["type"] == "input_limit_not_satisfied"
+        assert "No input-limit-eligible model candidate" in payload["error"]["message"]
 
 
 class TestAdminReloadBehavior:

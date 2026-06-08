@@ -155,7 +155,6 @@ def build_classification_input(
     selected.reverse()
 
     lines: list[str] = []
-
     lines.append("[conversation]")
     for turn in selected:
         lines.append(f"{turn.role}: {turn.text}")

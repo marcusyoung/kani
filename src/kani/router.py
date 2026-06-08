@@ -90,14 +90,6 @@ _DEFAULT_TIER = "MEDIUM"
 _TIER_ORDER = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]
 
 
-def _has_reasoning_content(messages: list[dict[str, Any]]) -> bool:
-    """Return True if any assistant message contains a reasoning_content field."""
-    for msg in messages:
-        if isinstance(msg, dict) and "reasoning_content" in msg:
-            return True
-    return False
-
-
 class Router:
     """Given chat messages, decides which model and provider to use."""
 

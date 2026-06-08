@@ -100,8 +100,8 @@ providers:
 # fallback: list of models tried on upstream error (5xx / timeout)
 #   - fallback: null is allowed and treated as []
 # provider: optional override; defaults to default_provider
-# Object entries may include context_window_tokens so long requests skip known
-# too-small models while string entries keep backward-compatible unknown windows.
+# Object entries may include max_input_tokens so long requests skip known
+# too-small models while string entries keep backward-compatible unknown limits.
 #
 # Tier selection is automatic based on prompt complexity scoring.
 # To route all requests to one profile, set default_profile above.
@@ -117,12 +117,12 @@ profiles:
             MEDIUM:
                 primary:
                     - model: "gpt-4o-mini"
-                      context_window_tokens: 128000
+                      max_input_tokens: 128000
                     - model: "gpt-4o"
-                      context_window_tokens: 128000
+                      max_input_tokens: 128000
                 fallback:
                     - model: "claude-sonnet-4-5-20250929"
-                      context_window_tokens: 200000
+                      max_input_tokens: 200000
             COMPLEX:
                 primary: "gpt-4o"
                 fallback:

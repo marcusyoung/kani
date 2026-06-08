@@ -1,6 +1,6 @@
 ## MODIFIED Requirements
 
-### Requirement: Context-window-aware candidate selection
+### Requirement: Input-limit-aware candidate selection
 
 Routing MUST avoid selecting model candidates whose configured input-token limit is smaller than the estimated request prompt tokens. The per-model routing metadata for this behavior is named `max_input_tokens`.
 

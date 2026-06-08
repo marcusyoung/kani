@@ -50,7 +50,53 @@ class LLMFeatureAnnotator:
         "You are labeling prompts for routing distillation. "
         "Return JSON object only with exactly these keys: "
         f"{', '.join(SEMANTIC_DIMENSIONS)}. "
-        "Each value must be one of: low, medium, high.\n\n"
+        "Each value MUST be one of: low, medium, high. "
+        "Do NOT use any other words or descriptions. "
+        "If unsure, use 'medium'.\n\n"
+        "Dimension definitions:\n"
+        "- codePresence: Does the prompt contain or request code? "
+        "low = no code whatsoever; medium = mentions code concepts; "
+        "high = large code blocks, debugging, or code generation tasks.\n"
+        "- reasoningMarkers: Does it ask for logical reasoning or chain-of-thought? "
+        "low = factual lookup or simple Q&A; medium = some analysis needed; "
+        "high = proofs, theorems, step-by-step deduction, multi-hop reasoning.\n"
+        "- technicalTerms: How domain-specific is the vocabulary? "
+        "low = everyday language; medium = some technical jargon; "
+        "high = dense specialized terminology.\n"
+        "- creativeMarkers: Is this a creative writing task? "
+        "low = not creative; medium = lightly creative; "
+        "high = story, poem, brainstorm, or open-ended creative generation.\n"
+        "- simpleIndicators: How trivial is the request? "
+        "low = complex or substantial (simpleIndicators is low for hard prompts); "
+        "medium = moderately substantial; high = extremely simple "
+        "('hello', 'what is X', 'define Y').\n"
+        "- multiStepPatterns: Does it require multiple sequential steps? "
+        "low = single step; medium = 2-3 steps; "
+        "high = many ordered steps, numbered phases, or complex workflow.\n"
+        "- questionComplexity: How deep or multi-faceted are the questions? "
+        "low = single straightforward question; medium = 2-3 questions; "
+        "high = deeply probing, multi-layered questioning.\n"
+        "- imperativeVerbs: How action-oriented is the prompt? "
+        "low = informational or descriptive; medium = some directives; "
+        "high = dominated by build/implement/deploy/review commands.\n"
+        "- constraintCount: How many explicit constraints or requirements? "
+        "low = open-ended; medium = 1-2 conditions; "
+        "high = many must/ensure/require/within/except constraints.\n"
+        "- outputFormat: Is a specific output format demanded? "
+        "low = no format specified; medium = vague hint; "
+        "high = explicit json/csv/markdown/table specification.\n"
+        "- referenceComplexity: Does it reference external or prior context? "
+        "low = self-contained; medium = references prior conversation; "
+        "high = complex multi-document or external-source references.\n"
+        "- negationComplexity: How many negative constraints? "
+        "low = positive framing; medium = some negation; "
+        "high = many not/without/except/don't conditions.\n"
+        "- domainSpecificity: Is this in a specialised domain? "
+        "low = general knowledge; medium = somewhat specialised; "
+        "high = deeply domain-specific (medical, legal, financial, scientific).\n"
+        "- agenticTask: Does this involve autonomous tool use or file ops? "
+        "low = pure informational query; medium = some tool interaction; "
+        "high = read file/edit/execute/deploy/debug — agent-style action.\n\n"
         "Prompt:\n{prompt}"
     )
 
@@ -108,7 +154,7 @@ class LLMFeatureAnnotator:
                         {
                             "role": "user",
                             "content": self._PROMPT_TEMPLATE.format(
-                                prompt=prompt[:2000]
+                                prompt=prompt[:3500]
                             ),
                         }
                     ],

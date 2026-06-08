@@ -73,6 +73,14 @@ _DEFAULT_TIER = "MEDIUM"
 _TIER_ORDER = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]
 
 
+def _has_reasoning_content(messages: list[dict[str, Any]]) -> bool:
+    """Return True if any assistant message contains a reasoning_content field."""
+    for msg in messages:
+        if isinstance(msg, dict) and "reasoning_content" in msg:
+            return True
+    return False
+
+
 class Router:
     """Given chat messages, decides which model and provider to use."""
 
@@ -160,6 +168,13 @@ class Router:
         # --- Override tier for agentic profile if agentic_score is high ---
         if profile == "agentic" and agentic_score > 0.6 and tier == "SIMPLE":
             tier = "MEDIUM"
+
+        # --- Force COMPLEX+ tier when conversation contains reasoning_content ---
+        # DeepSeek injects reasoning_content into assistant messages. Routing
+        # such conversations to providers that reject the field (e.g. Mistral)
+        # causes 422 errors. Force tier ≥ COMPLEX to keep them on ollamacloud.
+        if tier in ("SIMPLE", "MEDIUM") and _has_reasoning_content(messages):
+            tier = "COMPLEX"
 
         # --- Look up model in profile tier config with capability filtering ---
         resolved_tier, tier_cfg = self._resolve_tier_config(profile_cfg, tier)

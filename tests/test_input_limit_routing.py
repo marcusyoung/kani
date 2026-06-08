@@ -172,7 +172,7 @@ class TestInputLimitRouting:
                 MEDIUM=TierModelConfig(
                     primary=[
                         {"model": "small", "max_input_tokens": 4},
-                        "unknown-window",
+                        "unknown-limit",
                     ],
                 ),
             )
@@ -182,7 +182,7 @@ class TestInputLimitRouting:
 
         decision = router.route(_messages(), profile="auto")
 
-        assert decision.model == "unknown-window"
+        assert decision.model == "unknown-limit"
 
     def test_fallback_can_satisfy_long_input(self) -> None:
         cfg = _config(

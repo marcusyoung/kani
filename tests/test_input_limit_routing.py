@@ -116,6 +116,10 @@ class TestInputLimitConfig:
                 primary=[{"model": "legacy-model", "context_window_tokens": 8192}]
             )
 
+    def test_max_input_tokens_must_be_positive(self) -> None:
+        with pytest.raises(ValidationError, match="greater than 0"):
+            TierModelConfig(primary=[{"model": "invalid-model", "max_input_tokens": 0}])
+
     def test_provider_precedence_survives_candidate_metadata(self) -> None:
         cfg = _config(
             tiers=_all_tiers(

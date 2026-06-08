@@ -163,7 +163,7 @@ class Router:
         if profile == "agentic" and agentic_score > 0.6 and tier == "SIMPLE":
             tier = "MEDIUM"
 
-        # --- Look up model in profile tier config with capability/context filtering ---
+        # --- Look up model in profile tier config with capability/input-limit filtering ---
         resolved_tier, tier_cfg = self._resolve_tier_config(profile_cfg, tier)
         prompt_tokens = _estimate_tokens(messages)
         log.debug(
@@ -251,7 +251,7 @@ class Router:
         else:
             selection_candidates = tier_cfg.resolve_primary_candidate_entries()
             log.warning(
-                "No context-eligible candidates found; falling back to existing upstream handling profile=%s tier=%s prompt_tokens=%d",
+                "No input-limit-eligible candidates found; falling back to existing upstream handling profile=%s tier=%s prompt_tokens=%d",
                 profile,
                 resolved_tier,
                 prompt_tokens,
@@ -283,7 +283,8 @@ class Router:
                 tier_cfg.provider,
             )
             if promoted_from_fallback and (
-                fallback_candidate.model == model_id and fb_provider_name == provider_name
+                fallback_candidate.model == model_id
+                and fb_provider_name == provider_name
             ):
                 continue
             fb_provider_cfg = self._lookup_provider(fb_provider_name)
@@ -450,14 +451,14 @@ class Router:
         *,
         prompt_tokens: int,
     ) -> list[ResolvedModelCandidate]:
-        """Return primary candidates that satisfy capability and context metadata."""
+        """Return primary candidates that satisfy capability and input-limit metadata."""
         candidates = tier_cfg.resolve_primary_candidate_entries()
         capable_candidates = self._filter_capable_candidates(
             candidates,
             required_capabilities,
             tier_provider=tier_cfg.provider,
         )
-        return self._filter_context_window_candidates(
+        return self._filter_input_limit_candidates(
             capable_candidates,
             prompt_tokens=prompt_tokens,
             tier_provider=tier_cfg.provider,
@@ -470,14 +471,14 @@ class Router:
         *,
         prompt_tokens: int,
     ) -> list[ResolvedModelCandidate]:
-        """Return fallback candidates that satisfy capability and context metadata."""
+        """Return fallback candidates that satisfy capability and input-limit metadata."""
         candidates = tier_cfg.resolve_fallback_candidate_entries()
         capable_candidates = self._filter_capable_candidates(
             candidates,
             required_capabilities,
             tier_provider=tier_cfg.provider,
         )
-        return self._filter_context_window_candidates(
+        return self._filter_input_limit_candidates(
             capable_candidates,
             prompt_tokens=prompt_tokens,
             tier_provider=tier_cfg.provider,
@@ -510,7 +511,9 @@ class Router:
                 candidate.provider,
                 tier_provider,
             )
-            model_caps = self._get_model_capabilities(candidate.model, resolved_provider)
+            model_caps = self._get_model_capabilities(
+                candidate.model, resolved_provider
+            )
             if required_capabilities.issubset(model_caps):
                 capable.append(candidate)
 
@@ -532,28 +535,28 @@ class Router:
                 )
         return normalized
 
-    def _filter_context_window_candidates(
+    def _filter_input_limit_candidates(
         self,
         candidates: list[ResolvedModelCandidate],
         *,
         prompt_tokens: int,
         tier_provider: str,
     ) -> list[ResolvedModelCandidate]:
-        """Filter out candidates with known insufficient context windows."""
+        """Filter out candidates with known insufficient input-token limits."""
         eligible: list[ResolvedModelCandidate] = []
         for candidate in candidates:
-            context_window = candidate.context_window_tokens
-            if context_window is not None and prompt_tokens > context_window:
+            max_input_tokens = candidate.max_input_tokens
+            if max_input_tokens is not None and prompt_tokens > max_input_tokens:
                 resolved_provider = self._resolve_provider_name(
                     candidate.provider,
                     tier_provider,
                 )
                 log.info(
-                    "Skipping context-ineligible candidate model=%s provider=%s prompt_tokens=%d context_window_tokens=%d",
+                    "Skipping input-limit-ineligible candidate model=%s provider=%s prompt_tokens=%d max_input_tokens=%d",
                     candidate.model,
                     resolved_provider,
                     prompt_tokens,
-                    context_window,
+                    max_input_tokens,
                 )
                 continue
             eligible.append(candidate)

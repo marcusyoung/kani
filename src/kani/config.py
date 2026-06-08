@@ -81,12 +81,14 @@ class ProviderConfig(BaseModel):
 class ModelEntry(BaseModel):
     """A model with optional routing metadata and provider override."""
 
+    model_config = ConfigDict(extra="forbid")
+
     model: str
     provider: str = ""  # empty = inherit from tier or default
-    context_window_tokens: int | None = Field(
+    max_input_tokens: int | None = Field(
         default=None,
         gt=0,
-        description="Optional maximum prompt context tokens for routing eligibility.",
+        description="Optional maximum input prompt tokens for routing eligibility.",
     )
 
 
@@ -95,7 +97,7 @@ class ResolvedModelCandidate(BaseModel):
 
     model: str
     provider: str = ""
-    context_window_tokens: int | None = None
+    max_input_tokens: int | None = None
 
     def as_tuple(self) -> tuple[str, str]:
         """Return the backward-compatible (model, provider) tuple."""
@@ -152,7 +154,7 @@ class TierModelConfig(BaseModel):
             return ResolvedModelCandidate(
                 model=entry.model,
                 provider=entry.provider,
-                context_window_tokens=entry.context_window_tokens,
+                max_input_tokens=entry.max_input_tokens,
             )
         return ResolvedModelCandidate(model=entry)
 

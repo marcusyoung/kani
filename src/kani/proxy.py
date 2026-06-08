@@ -449,6 +449,44 @@ def _log_usage(
     )
 
 
+_KEEP_REASONING_PREFIXES = ("deepseek-v4-", "kimi-k2")
+
+
+def _sanitize_reasoning_content(
+    body: dict[str, Any], model_name: str
+) -> dict[str, Any]:
+    """Strip reasoning_content from messages when the target model doesn't support it.
+
+    DeepSeek V4 and Kimi K2 models emit reasoning_content in assistant messages.
+    Routing those messages to providers that reject the field (e.g. Mistral) causes
+    422 errors. This function strips it at the proxy layer, preserving it only when
+    the target model is known to support it.
+    """
+    if model_name.startswith(_KEEP_REASONING_PREFIXES):
+        return body
+
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return body
+
+    cleaned_messages: list[dict[str, Any]] = []
+    needs_copy = False
+    for msg in messages:
+        if isinstance(msg, dict) and "reasoning_content" in msg:
+            needs_copy = True
+            cleaned = {k: v for k, v in msg.items() if k != "reasoning_content"}
+            cleaned_messages.append(cleaned)
+        else:
+            cleaned_messages.append(msg)
+
+    if not needs_copy:
+        return body
+
+    body = dict(body)
+    body["messages"] = cleaned_messages
+    return body
+
+
 async def _proxy_upstream(
     base_url: str,
     api_key: str,
@@ -473,6 +511,7 @@ async def _proxy_upstream(
 
     is_streaming = body.get("stream", False)
     model_name = body.get("model", "unknown")
+    body = _sanitize_reasoning_content(body, model_name)
     extra_headers = (
         _kani_headers(
             decision,

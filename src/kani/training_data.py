@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
+import time
 from pathlib import Path
 from typing import Any, Protocol, TypedDict
 
@@ -46,58 +48,31 @@ class DistilledFeatureExample(TypedDict):
 class LLMFeatureAnnotator:
     """Offline annotator that labels semantic dimensions with an LLM."""
 
-    _PROMPT_TEMPLATE = (
-        "You are labeling prompts for routing distillation. "
-        "Return JSON object only with exactly these keys: "
+    _SYSTEM_PROMPT = (
+        "You are a prompt classifier for routing distillation. "
+        "Return ONLY a JSON object with exactly these keys: "
         f"{', '.join(SEMANTIC_DIMENSIONS)}. "
         "Each value MUST be one of: low, medium, high. "
-        "Do NOT use any other words or descriptions. "
+        "No other text. No markdown. No explanation. "
         "If unsure, use 'medium'.\n\n"
-        "Dimension definitions:\n"
-        "- codePresence: Does the prompt contain or request code? "
-        "low = no code whatsoever; medium = mentions code concepts; "
-        "high = large code blocks, debugging, or code generation tasks.\n"
-        "- reasoningMarkers: Does it ask for logical reasoning or chain-of-thought? "
-        "low = factual lookup or simple Q&A; medium = some analysis needed; "
-        "high = proofs, theorems, step-by-step deduction, multi-hop reasoning.\n"
-        "- technicalTerms: How domain-specific is the vocabulary? "
-        "low = everyday language; medium = some technical jargon; "
-        "high = dense specialized terminology.\n"
-        "- creativeMarkers: Is this a creative writing task? "
-        "low = not creative; medium = lightly creative; "
-        "high = story, poem, brainstorm, or open-ended creative generation.\n"
-        "- simpleIndicators: How trivial is the request? "
-        "low = complex or substantial (simpleIndicators is low for hard prompts); "
-        "medium = moderately substantial; high = extremely simple "
-        "('hello', 'what is X', 'define Y').\n"
-        "- multiStepPatterns: Does it require multiple sequential steps? "
-        "low = single step; medium = 2-3 steps; "
-        "high = many ordered steps, numbered phases, or complex workflow.\n"
-        "- questionComplexity: How deep or multi-faceted are the questions? "
-        "low = single straightforward question; medium = 2-3 questions; "
-        "high = deeply probing, multi-layered questioning.\n"
-        "- imperativeVerbs: How action-oriented is the prompt? "
-        "low = informational or descriptive; medium = some directives; "
-        "high = dominated by build/implement/deploy/review commands.\n"
-        "- constraintCount: How many explicit constraints or requirements? "
-        "low = open-ended; medium = 1-2 conditions; "
-        "high = many must/ensure/require/within/except constraints.\n"
-        "- outputFormat: Is a specific output format demanded? "
-        "low = no format specified; medium = vague hint; "
-        "high = explicit json/csv/markdown/table specification.\n"
-        "- referenceComplexity: Does it reference external or prior context? "
-        "low = self-contained; medium = references prior conversation; "
-        "high = complex multi-document or external-source references.\n"
-        "- negationComplexity: How many negative constraints? "
-        "low = positive framing; medium = some negation; "
-        "high = many not/without/except/don't conditions.\n"
-        "- domainSpecificity: Is this in a specialised domain? "
-        "low = general knowledge; medium = somewhat specialised; "
-        "high = deeply domain-specific (medical, legal, financial, scientific).\n"
-        "- agenticTask: Does this involve autonomous tool use or file ops? "
-        "low = pure informational query; medium = some tool interaction; "
-        "high = read file/edit/execute/deploy/debug — agent-style action.\n\n"
-        "Prompt:\n{prompt}"
+        "HIGH-IMPACT dimensions (prioritize accuracy): "
+        "reasoningMarkers, agenticTask, multiStepPatterns, "
+        "questionComplexity, constraintCount, technicalTerms.\n\n"
+        "Definitions:\n"
+        "- codePresence: code present? low=no code, medium=mentions code, high=code blocks\n"
+        "- reasoningMarkers: logical reasoning? low=factual, medium=explanation, high=proofs/deduction\n"
+        "- technicalTerms: domain vocabulary? low=everyday, medium=some jargon, high=dense terms\n"
+        "- creativeMarkers: creative task? low=no, medium=lightly, high=story/poem\n"
+        "- simpleIndicators: trivial? low=complex, medium=moderate, high=simple (high LOWERS score)\n"
+        "- multiStepPatterns: sequential steps? low=single, medium=2-3, high=many\n"
+        "- questionComplexity: depth? low=single Q, medium=2-3 Qs, high=deep probing\n"
+        "- imperativeVerbs: action-oriented? low=informational, medium=some directives, high=commands\n"
+        "- constraintCount: explicit constraints? low=open-ended, medium=1-2, high=many\n"
+        "- outputFormat: format demanded? low=none, medium=vague, high=explicit\n"
+        "- referenceComplexity: external context? low=self-contained, medium=prior chat, high=multi-doc\n"
+        "- negationComplexity: negative constraints? low=none, medium=some, high=many\n"
+        "- domainSpecificity: specialized domain? low=general, medium=somewhat, high=deeply\n"
+        "- agenticTask: tool/file ops? low=info only, medium=tool interaction, high=explicit ops"
     )
 
     def __init__(
@@ -141,46 +116,65 @@ class LLMFeatureAnnotator:
                 "KANI_LLM_ANNOTATOR_API_KEY or OPENROUTER_API_KEY is required"
             )
 
-        try:
-            response = httpx.post(
-                f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": self._PROMPT_TEMPLATE.format(
-                                prompt=prompt[:3500]
-                            ),
-                        }
-                    ],
-                    "temperature": 0.0,
-                    "max_tokens": 300,
-                },
-                timeout=30.0,
-            )
-            response.raise_for_status()
-            data = response.json()
-        except (httpx.HTTPError, json.JSONDecodeError):
-            return None
+        max_retries = 5
+        base_delay = 2.0
+        for attempt in range(max_retries):
+            try:
+                response = httpx.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": self._SYSTEM_PROMPT,
+                            },
+                            {
+                                "role": "user",
+                                "content": prompt[:3500],
+                            },
+                        ],
+                        "temperature": 0.0,
+                        "max_tokens": 1024,
+                    },
+                    timeout=30.0,
+                )
+                response.raise_for_status()
+                data = response.json()
+                break
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                    print(f"  [RATE LIMIT] Retrying in {delay:.1f}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(delay)
+                    continue
+                print(f"  [DEBUG] API/JSON error for prompt '{prompt[:80]}...': {e}")
+                return None
+            except (httpx.HTTPError, json.JSONDecodeError) as e:
+                print(f"  [DEBUG] API/JSON error for prompt '{prompt[:80]}...': {e}")
+                return None
 
         content = (
             data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         )
         if not content:
+            print(f"  [DEBUG] Empty response for prompt '{prompt[:80]}...'")
             return None
         stripped = content.strip()
         if stripped.startswith("```"):
             stripped = stripped.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         try:
             parsed = json.loads(stripped)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            print(f"  [DEBUG] Invalid JSON for prompt '{prompt[:80]}...': {e}")
+            print(f"  [DEBUG] Raw content: {stripped[:200]}...")
             return None
         if not isinstance(parsed, dict):
+            print(f"  [DEBUG] Non-dict response for prompt '{prompt[:80]}...': {parsed}")
             return None
 
         labels: dict[str, str] = {}
@@ -300,7 +294,7 @@ def _save_examples(
     return examples
 
 
-_CHECKPOINT_INTERVAL = 1
+_CHECKPOINT_INTERVAL = 50
 
 
 def extract_distilled_feature_examples(
@@ -308,6 +302,7 @@ def extract_distilled_feature_examples(
     *,
     annotator: FeatureAnnotator | None = None,
     checkpoint_path: Path | None = None,
+    force_annotate: bool = False,
 ) -> list[DistilledFeatureExample]:
     latest_by_prompt: dict[str, DistilledFeatureExample] = {}
 
@@ -334,7 +329,7 @@ def extract_distilled_feature_examples(
             print(f"  [{idx}/{total}] skip: empty prompt")
             continue
 
-        labels = _extract_semantic_labels_from_record(record)
+        labels = None if force_annotate else _extract_semantic_labels_from_record(record)
         source = "log"
         if labels is None and annotator is not None:
             if prompt in latest_by_prompt:
@@ -380,11 +375,13 @@ def build_feature_dataset(
     output_path: Path,
     *,
     annotator: FeatureAnnotator | None = None,
+    force_annotate: bool = False,
 ) -> list[DistilledFeatureExample]:
     examples = extract_distilled_feature_examples(
         load_routing_records(log_paths),
         annotator=annotator,
         checkpoint_path=output_path if annotator else None,
+        force_annotate=force_annotate,
     )
     _save_examples(
         {e["prompt"]: e for e in examples},
@@ -430,6 +427,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Use LLM annotation for records missing semantic labels",
     )
+    parser.add_argument(
+        "--force-annotate",
+        action="store_true",
+        help="Ignore pre-existing semanticLabels from routing logs and re-annotate all records with the LLM",
+    )
     parser.add_argument("--model", help="LLM model for annotation")
     parser.add_argument("--base-url", help="LLM base URL for annotation")
     parser.add_argument("--api-key", help="LLM API key for annotation")
@@ -444,7 +446,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("No routing log files found")
 
     annotator = None
-    if args.annotate_missing:
+    if args.annotate_missing or args.force_annotate:
         annotator = LLMFeatureAnnotator(
             model=args.model,
             base_url=args.base_url,
@@ -452,7 +454,12 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     output_path = Path(args.output).expanduser()
-    examples = build_feature_dataset(log_paths, output_path, annotator=annotator)
+    examples = build_feature_dataset(
+        log_paths,
+        output_path,
+        annotator=annotator,
+        force_annotate=args.force_annotate,
+    )
 
     print(f"Loaded {len(log_paths)} log files")
     print(f"Wrote {len(examples)} distilled feature examples to {output_path}")

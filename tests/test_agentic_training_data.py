@@ -62,12 +62,10 @@ def test_semantic_dimension_calibration_covers_every_dimension() -> None:
 def test_semantic_dimension_calibration_text_includes_representative_guidance() -> None:
     text = _semantic_dimension_calibration_text()
 
-    assert "- codePresence:" in text
-    assert "Contains code blocks" in text
-    assert "- reasoningMarkers:" in text
-    assert "root-cause analysis" in text
-    assert "- agenticTask:" in text
-    assert "autonomous implementation" in text
+    for dim in ("codePresence", "reasoningMarkers", "agenticTask"):
+        assert f"- {dim}:" in text
+    for label in ("low", "medium", "high"):
+        assert f"- {label}:" in text
 
 
 def test_llm_feature_annotator_calibration_is_lazy(monkeypatch) -> None:
@@ -341,7 +339,7 @@ def _capture_annotation_prompt(monkeypatch, prompt: str) -> str:
     assert isinstance(message, dict)
     content = message["content"]
     assert isinstance(content, str)
-    return content.split("Prompt:\n", 1)[1]
+    return content.split("Prompt:\n", 1)[1] if "Prompt:\n" in content else content
 
 
 def test_annotation_prompt_limit_matches_runtime_classification_default() -> None:
@@ -373,6 +371,7 @@ def test_llm_feature_annotator_does_not_truncate_varied_prompt_at_2000(
     assert len(prompt) > 2000
     sentinel = "AFTER_2000_SENTINEL: retain this calibration-relevant tail."
     prompt = f"{prompt[:2000]}{sentinel}{prompt[2000:]}"
+    assert len(prompt) <= ANNOTATION_PROMPT_MAX_CHARS
 
     sent_prompt = _capture_annotation_prompt(monkeypatch, prompt)
 

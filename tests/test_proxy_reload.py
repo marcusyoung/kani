@@ -419,15 +419,32 @@ class TestReasoningContentCompatibility:
         assert captured[0]["model"] == "auto-simple"
         assert "reasoning_content" not in captured[0]["messages"][0]
 
-    def test_fallback_sanitizes_with_fallback_candidate_compatibility(
-        self, tmp_path: Path
-    ):
-        path = tmp_path / "config.yaml"
-        provider_body = """  fallback:
+    @pytest.mark.parametrize(
+        ("provider_body", "fallback_preserves"),
+        [
+            (
+                """  fallback:
     name: fallback
     base_url: "http://fallback.example"
     api_key: "fake-fallback"
-"""
+""",
+                False,
+            ),
+            (
+                """  fallback:
+    name: fallback
+    base_url: "http://fallback.example"
+    api_key: "fake-fallback"
+    supports_reasoning_content: true
+""",
+                True,
+            ),
+        ],
+    )
+    def test_fallback_sanitizes_with_fallback_candidate_compatibility(
+        self, tmp_path: Path, provider_body: str, fallback_preserves: bool
+    ):
+        path = tmp_path / "config.yaml"
         path.write_text(
             _config_text(
                 fallback_models='[{model: "fallback-model", provider: "fallback"}]',
@@ -465,7 +482,10 @@ class TestReasoningContentCompatibility:
         assert captured[0]["model"] == "auto-simple"
         assert captured[1]["model"] == "fallback-model"
         assert "reasoning_content" not in captured[0]["messages"][0]
-        assert "reasoning_content" not in captured[1]["messages"][0]
+        if fallback_preserves:
+            assert captured[1]["messages"][0]["reasoning_content"] == "private chain"
+        else:
+            assert "reasoning_content" not in captured[1]["messages"][0]
 
     def test_supported_model_preserves_reasoning_content(self, tmp_path: Path):
         path = tmp_path / "config.yaml"

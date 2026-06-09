@@ -810,7 +810,8 @@ async def _try_with_fallbacks(
             decision.model,
             original_idx,
         )
-        fb_body = copy.deepcopy(fallback_body_base or body)
+        fb_body_base = fallback_body_base if fallback_body_base is not None else body
+        fb_body = copy.deepcopy(fb_body_base)
         fb_body["model"] = fb.model
         # Restyle from a body without primary-provider proxy-injected reasoning controls.
         if decision.reasoning_effort:
@@ -952,6 +953,8 @@ def _supports_reasoning_content(
     if model_support is not None:
         return model_support
     provider_cfg = runtime.config.providers.get(provider_name)
+    if provider_cfg is None:
+        provider_cfg = runtime.config.providers.get(runtime.config.default_provider)
     if provider_cfg is None:
         logger.warning(
             "Unknown provider for reasoning_content support fallback model=%s provider=%s",

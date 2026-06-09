@@ -10,7 +10,10 @@ from typing import Any, Protocol, TypedDict
 
 import httpx
 
-from kani.classification_context import build_classification_input
+from kani.classification_context import (
+    DEFAULT_CLASSIFICATION_INPUT_MAX_CHARS,
+    build_classification_input,
+)
 from kani.config import load_config
 from kani.dirs import data_dir, log_dir
 from kani.scorer import SEMANTIC_DIMENSIONS
@@ -108,7 +111,7 @@ class LLMFeatureAnnotator:
                         {
                             "role": "user",
                             "content": self._PROMPT_TEMPLATE.format(
-                                prompt=prompt[:2000]
+                                prompt=prompt[:DEFAULT_CLASSIFICATION_INPUT_MAX_CHARS]
                             ),
                         }
                     ],

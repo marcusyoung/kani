@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -325,13 +326,18 @@ class TestReasoningContentCompatibility:
   - prefix: "auto-simple"
     provider: "dummy"
     supports_reasoning_content: true"""
-        path.write_text(
-            _config_text(provider_body=provider_body, model_rules=model_rules)
+        config_text = _config_text(
+            provider_body=provider_body,
+            model_rules=model_rules,
+            compaction_enabled=True,
         )
+        path.write_text(config_text)
 
         configure(str(path))
         state = proxy_mod._require_runtime_state()
 
+        assert re.search(r'api_key: "fake-fallback"\nprofiles:', config_text)
+        assert re.search(r"supports_reasoning_content: true\nsmart_proxy:", config_text)
         assert "fallback" in state.config.providers
         assert state.config.model_rules[0].supports_reasoning_content is True
 

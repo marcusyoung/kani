@@ -234,6 +234,10 @@ class TestReasoningContentCompatibility:
             )
             is False
         )
+        docstring = proxy_mod._get_model_reasoning_content_support.__doc__ or ""
+        assert "Provider-matching rules outrank provider-agnostic rules" in docstring
+        assert "before prefix" in docstring
+        assert "provider-specific wildcard rule" in docstring
 
     def test_unknown_provider_logs_warning(self, caplog: pytest.LogCaptureFixture):
         cfg = KaniConfig(

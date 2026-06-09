@@ -18,11 +18,6 @@
 
 None.
 
-## Final Validation
-
-Archive validation itself is the authoritative final OpenSpec validation gate.
-Expected archive gate: `cflx openspec validate harden-reasoning-content-compat --archive-gate`
-
 ## Acceptance #1 Failure Follow-up
 - [x] archive-gate が失敗していた tasks.md の verification note 形式を修正する。Completion condition: `openspec/changes/harden-reasoning-content-compat/tasks.md` の behavior-bearing tasks が `(...verification: ...)` 形式で検証所有者を明示し、`src/kani/proxy.py` と `tests/test_proxy_reload.py` の repository-verifiable evidence を参照する。 (verification: integration - `src/kani/proxy.py`, `tests/test_proxy_reload.py`, `openspec/changes/harden-reasoning-content-compat/tasks.md`)
 - [x] acceptance で確認済みの実装要件が現在のコード・テストに残っていることを再確認する。Completion condition: `src/kani/proxy.py` に docstring/warning/deepcopy、`tests/test_proxy_reload.py` に newline normalization と該当テストが存在する。 (verification: unit - `uv run pytest tests/test_proxy_reload.py -q -k 'scoring_precedence or unknown_provider or sanitizer_deep_copies_messages or config_text or reasoning_content'`)
@@ -41,3 +36,12 @@ Expected archive gate: `cflx openspec validate harden-reasoning-content-compat -
 - [x] Fix archive-gate-rejected verification note in Acceptance #3 follow-up task. Completion condition: `openspec/changes/harden-reasoning-content-compat/tasks.md:38` cites repository-verifiable evidence paths in addition to the archive-gate command. (verification: integration - `openspec/changes/harden-reasoning-content-compat/tasks.md`, `src/kani/proxy.py`, `tests/test_proxy_reload.py`, `cflx openspec validate harden-reasoning-content-compat --archive-gate`)
 - [x] Add non-OpenSpec assertion hardening for unknown-provider warning message shape. Completion condition: `tests/test_proxy_reload.py::TestReasoningContentCompatibility::test_unknown_provider_logs_warning` asserts the exact `kani.proxy` warning message contains both `model=unknown-model` and `provider=missing-provider`. (verification: unit - `tests/test_proxy_reload.py`, `uv run pytest tests/test_proxy_reload.py -q -k unknown_provider`)
 - [x] Re-run archive-gate after Acceptance #4 verification-note and test hardening. Completion condition: archive validation succeeds with the repository-verifiable evidence preserved in `src/kani/proxy.py`, `tests/test_proxy_reload.py`, and `openspec/changes/harden-reasoning-content-compat/tasks.md`. (verification: integration - `src/kani/proxy.py`, `tests/test_proxy_reload.py`, `openspec/changes/harden-reasoning-content-compat/tasks.md`, `cflx openspec validate harden-reasoning-content-compat --archive-gate`)
+
+## Acceptance #5 Failure Follow-up
+- [x] Move self-referential archive-gate checkbox validation out of active task sections. Completion condition: `openspec/changes/harden-reasoning-content-compat/tasks.md` no longer contains an archive-gate rerun checkbox task under Acceptance #3/#4/#5 active follow-up sections; archive validation remains documented only in the non-checkbox Final Validation section. (verification: integration - `openspec/changes/harden-reasoning-content-compat/tasks.md`, `cflx openspec validate harden-reasoning-content-compat --archive-gate`)
+- [x] Add non-OpenSpec assertion hardening for reasoning-content precedence documentation. Completion condition: `tests/test_proxy_reload.py::TestReasoningContentCompatibility::test_scoring_precedence_wildcard_provider_beats_specific_prefix` asserts the docstring documents provider-matching precedence before prefix specificity. (verification: unit - `tests/test_proxy_reload.py`, `uv run pytest tests/test_proxy_reload.py -q -k scoring_precedence`)
+
+## Final Validation
+
+Archive validation is the authoritative final OpenSpec validation gate and is intentionally not represented as a checkbox task.
+Expected archive gate: `cflx openspec validate harden-reasoning-content-compat --archive-gate`

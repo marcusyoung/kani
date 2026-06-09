@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -93,6 +94,11 @@ def _config_text(
         )
 
     provider_extra = provider_body or ""
+    if provider_extra and not provider_extra.endswith("\n"):
+        provider_extra += "\n"
+    model_rules_extra = model_rules or ""
+    if model_rules_extra and not model_rules_extra.endswith("\n"):
+        model_rules_extra += "\n"
     return f"""
 host: "{host}"
 port: {port}
@@ -111,7 +117,7 @@ providers:
       COMPLEX: {{{auto_complex}}}
       REASONING: {{{auto_reason}}}
 {alt_profile}
-{model_rules}{smart_proxy}
+{model_rules_extra}{smart_proxy}
 """
 
 
@@ -193,6 +199,147 @@ class TestReasoningContentCompatibility:
             )
             is False
         )
+
+    def test_scoring_precedence_wildcard_provider_beats_specific_prefix(self):
+        cfg = KaniConfig(
+            providers={
+                "dummy": ProviderConfig(
+                    name="dummy",
+                    base_url="http://dummy.example",
+                ),
+            },
+            model_rules=[
+                ModelRuleEntry(
+                    prefix="sonnet-",
+                    supports_reasoning_content=True,
+                ),
+                ModelRuleEntry(
+                    prefix="*",
+                    provider="dummy",
+                    supports_reasoning_content=False,
+                ),
+            ],
+        )
+        state = RuntimeState(
+            config_path=None,
+            config=cfg,
+            router=Router(cfg),
+            fallback_backoff_state=Router(cfg).fallback_backoff_state,
+            config_loaded_at="test",
+            version=1,
+        )
+
+        assert (
+            proxy_mod._get_model_reasoning_content_support(
+                "sonnet-4-20250514", "dummy", state
+            )
+            is False
+        )
+        docstring = proxy_mod._get_model_reasoning_content_support.__doc__ or ""
+        assert "Provider-matching rules outrank provider-agnostic rules" in docstring
+        assert "before prefix" in docstring
+        assert "provider-specific wildcard rule" in docstring
+
+    def test_unknown_provider_logs_warning(self, caplog: pytest.LogCaptureFixture):
+        cfg = KaniConfig(
+            providers={},
+            model_rules=[],
+        )
+        state = RuntimeState(
+            config_path=None,
+            config=cfg,
+            router=Router(cfg),
+            fallback_backoff_state=Router(cfg).fallback_backoff_state,
+            config_loaded_at="test",
+            version=1,
+        )
+
+        with caplog.at_level("WARNING", logger="kani.proxy"):
+            supported = proxy_mod._supports_reasoning_content(
+                "unknown-model", "missing-provider", state
+            )
+
+        assert supported is False
+        warning_records = [
+            record
+            for record in caplog.records
+            if record.name == "kani.proxy" and record.levelname == "WARNING"
+        ]
+        assert len(warning_records) == 1
+        assert warning_records[0].name == "kani.proxy"
+        assert warning_records[0].getMessage() == (
+            "Unknown provider for reasoning_content support fallback "
+            "model=unknown-model provider=missing-provider"
+        )
+        assert "Unknown provider for reasoning_content support fallback" in caplog.text
+        assert "missing-provider" in caplog.text
+        assert "unknown-model" in caplog.text
+
+    def test_sanitizer_deep_copies_messages(self):
+        cfg = KaniConfig(
+            providers={
+                "dummy": ProviderConfig(
+                    name="dummy",
+                    base_url="http://dummy.example",
+                ),
+            }
+        )
+        state = RuntimeState(
+            config_path=None,
+            config=cfg,
+            router=Router(cfg),
+            fallback_backoff_state=Router(cfg).fallback_backoff_state,
+            config_loaded_at="test",
+            version=1,
+        )
+        body: dict[str, Any] = {
+            "model": "plain-model",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": {"parts": ["answer"]},
+                    "reasoning_content": "private chain",
+                },
+                {"role": "user", "content": {"parts": ["hello"]}},
+            ],
+        }
+
+        sanitized = proxy_mod._sanitize_reasoning_content_for_candidate(
+            body, "plain-model", "dummy", state
+        )
+        sanitized["messages"][0]["content"]["parts"].append("mutated")
+        sanitized["messages"][1]["content"]["parts"].append("mutated")
+
+        assert "reasoning_content" not in sanitized["messages"][0]
+        assert body["messages"][0]["content"]["parts"] == ["answer"]
+        assert body["messages"][1]["content"]["parts"] == ["hello"]
+
+    def test_config_text_accepts_optional_fragments_without_trailing_newline(
+        self, tmp_path: Path
+    ):
+        path = tmp_path / "config.yaml"
+        provider_body = '''  fallback:
+    name: fallback
+    base_url: "http://fallback.example"
+    api_key: "fake-fallback"'''
+        model_rules = """model_rules:
+  - prefix: "auto-simple"
+    provider: "dummy"
+    supports_reasoning_content: true"""
+        config_text = _config_text(
+            provider_body=provider_body,
+            model_rules=model_rules,
+            compaction_enabled=True,
+        )
+        path.write_text(config_text)
+
+        configure(str(path))
+        state = proxy_mod._require_runtime_state()
+
+        assert re.search(r'api_key: "fake-fallback"\nprofiles:', config_text)
+        assert re.search(r"supports_reasoning_content: true\nsmart_proxy:", config_text)
+        assert "fallback" in state.config.providers
+        assert state.config.model_rules[0].supports_reasoning_content is True
 
     def test_routed_primary_strips_unsupported_reasoning_content(self, tmp_path: Path):
         path = tmp_path / "config.yaml"

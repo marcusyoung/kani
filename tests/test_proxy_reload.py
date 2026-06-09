@@ -416,6 +416,7 @@ class TestReasoningContentCompatibility:
                 )
 
         assert resp.status_code == 200
+        assert len(captured) == 1
         assert captured[0]["model"] == "auto-simple"
         assert "reasoning_content" not in captured[0]["messages"][0]
 
@@ -479,6 +480,7 @@ class TestReasoningContentCompatibility:
                 )
 
         assert resp.status_code == 200
+        assert len(captured) == 2
         assert captured[0]["model"] == "auto-simple"
         assert captured[1]["model"] == "fallback-model"
         assert "reasoning_content" not in captured[0]["messages"][0]
@@ -521,6 +523,7 @@ class TestReasoningContentCompatibility:
                 )
 
         assert resp.status_code == 200
+        assert len(captured) == 1
         assert captured[0]["messages"][0]["reasoning_content"] == "keep me"
 
     def test_passthrough_keeps_reasoning_content_unchanged(self, configured_proxy):
@@ -548,6 +551,7 @@ class TestReasoningContentCompatibility:
                 )
 
         assert resp.status_code == 200
+        assert len(captured) == 1
         assert captured[0]["model"] == "direct-model"
         assert captured[0]["messages"][0]["reasoning_content"] == "pass through"
 

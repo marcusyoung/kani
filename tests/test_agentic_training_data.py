@@ -6,6 +6,7 @@ from pathlib import Path
 from kani.classification_context import DEFAULT_CLASSIFICATION_INPUT_MAX_CHARS
 from kani.scorer import SEMANTIC_DIMENSIONS
 from kani.training_data import (
+    ANNOTATION_PROMPT_MAX_CHARS,
     LLMFeatureAnnotator,
     _classification_prompt_from_record,
     build_feature_dataset,
@@ -220,6 +221,10 @@ def _capture_annotation_prompt(monkeypatch, prompt: str) -> str:
     return content.split("Prompt:\n", 1)[1]
 
 
+def test_annotation_prompt_limit_matches_runtime_classification_default() -> None:
+    assert ANNOTATION_PROMPT_MAX_CHARS == DEFAULT_CLASSIFICATION_INPUT_MAX_CHARS
+
+
 def test_llm_feature_annotator_bounds_prompt_at_runtime_classification_default(
     monkeypatch,
 ) -> None:
@@ -227,8 +232,8 @@ def test_llm_feature_annotator_bounds_prompt_at_runtime_classification_default(
 
     sent_prompt = _capture_annotation_prompt(monkeypatch, prompt)
 
-    assert len(sent_prompt) == DEFAULT_CLASSIFICATION_INPUT_MAX_CHARS
-    assert sent_prompt == prompt[:DEFAULT_CLASSIFICATION_INPUT_MAX_CHARS]
+    assert len(sent_prompt) == ANNOTATION_PROMPT_MAX_CHARS
+    assert sent_prompt == prompt[:ANNOTATION_PROMPT_MAX_CHARS]
 
 
 def test_llm_feature_annotator_does_not_truncate_prompt_at_2000(

@@ -19,6 +19,7 @@ from kani.dirs import data_dir, log_dir
 from kani.scorer import SEMANTIC_DIMENSIONS
 
 VALID_DIMENSION_LABELS = {"low", "medium", "high"}
+ANNOTATION_PROMPT_MAX_CHARS = DEFAULT_CLASSIFICATION_INPUT_MAX_CHARS
 
 
 class FeatureAnnotator(Protocol):
@@ -111,7 +112,7 @@ class LLMFeatureAnnotator:
                         {
                             "role": "user",
                             "content": self._PROMPT_TEMPLATE.format(
-                                prompt=prompt[:DEFAULT_CLASSIFICATION_INPUT_MAX_CHARS]
+                                prompt=prompt[:ANNOTATION_PROMPT_MAX_CHARS]
                             ),
                         }
                     ],

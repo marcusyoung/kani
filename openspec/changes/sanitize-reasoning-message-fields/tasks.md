@@ -21,3 +21,6 @@ Additional provider-specific message fields can be added as separate compatibili
 ## Final Validation
 
 Expected archive gate: `cflx openspec validate sanitize-reasoning-message-fields --archive-gate`.
+
+## Acceptance #1 Failure Follow-up
+- [x] Archive commitability blocker: actual commit path has executable pre-commit hook at /Users/tumf/services/kani/.git/hooks/pre-commit using .pre-commit-config.yaml. Running `agent-exec run -- pre-commit run --all-files` exited 1. Evidence: agent-exec job 252b7fb06c6a6fd16784ff8371e759dc stdout lines 5-10 show `ruff format...Failed`, `files were modified by this hook`, `1 file reformatted, 39 files left unchanged`. Relevant path: tests/test_proxy_reload.py; `git diff -- tests/test_proxy_reload.py` shows the hook removed a blank line after `_config_text(...) -> str:`. Working tree is now dirty (`git status --short` shows ` M tests/test_proxy_reload.py`), and cflx-accept rules say dirty working tree is always FAIL. Action: kept the ruff-format change and reran `agent-exec run -- pre-commit run --all-files` (job 2f62f5ab95ddb0cb3affb1864a4a9f47), which exited 0.

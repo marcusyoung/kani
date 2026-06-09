@@ -29,7 +29,6 @@ def _config_text(
     provider_body: str = "",
     model_rules: str = "",
 ) -> str:
-
     alt_profile = ""
     if include_alt_profile:
         alt_profile = """

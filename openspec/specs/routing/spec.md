@@ -393,3 +393,21 @@ Routing MUST avoid selecting model candidates whose configured input-token limit
 **When**: routing selects a model for the request
 **Then**: kani MUST skip the cooled candidate when another fitted candidate is available
 **And**: if cooldown must be ignored because every fitted candidate is cooling down, kani MUST choose only from candidates that still fit the estimated prompt tokens
+
+### Requirement: Offline feature annotator calibration
+
+The offline feature annotator MUST provide semantic calibration guidance for every distilled routing semantic dimension when asking an LLM to label prompts.
+
+#### Scenario: Annotator prompt includes dimension definitions
+
+**Given** kani prepares an offline annotation request
+**When** `LLMFeatureAnnotator` builds the annotator prompt
+**Then** the prompt MUST include `low`, `medium`, and `high` calibration guidance for every semantic dimension
+**And** the prompt MUST still require a JSON object containing exactly the semantic dimension keys
+
+#### Scenario: Annotation parser remains strict
+
+**Given** an annotator response omits a required dimension or returns a label outside `low`, `medium`, and `high`
+**When** kani parses the annotation response
+**Then** kani MUST reject that annotation result
+**And** kani MUST NOT silently coerce unknown labels into valid labels

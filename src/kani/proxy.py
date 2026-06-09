@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -752,6 +753,7 @@ async def _try_with_fallbacks(
     request_id: str | None = None,
     compaction_result: CompactionResult | None = None,
     state: RuntimeState | None = None,
+    fallback_body_base: dict[str, Any] | None = None,
 ) -> StreamingResponse | JSONResponse:
     """Try primary, then fallbacks on failure."""
     runtime = state or _require_runtime_state()
@@ -805,9 +807,9 @@ async def _try_with_fallbacks(
             decision.model,
             original_idx,
         )
-        fb_body = dict(body)
+        fb_body = copy.deepcopy(fallback_body_base or body)
         fb_body["model"] = fb.model
-        # Restyle for fallback provider (do not reuse primary provider's reasoning shape)
+        # Restyle from a body without primary-provider proxy-injected reasoning controls.
         if decision.reasoning_effort:
             fb_style = _get_reasoning_style_for_candidate(
                 fb.model, fb.provider, runtime
@@ -884,11 +886,11 @@ def _get_model_reasoning_style(
 
 
 def _get_provider_reasoning_style(provider_name: str, runtime: RuntimeState) -> str:
-    """Return provider reasoning_style or default 'openai'."""
+    """Return provider reasoning_style or default 'none'."""
     provider_cfg = runtime.config.providers.get(provider_name)
     if provider_cfg and hasattr(provider_cfg, "reasoning_style"):
         return provider_cfg.reasoning_style  # type: ignore[attr-defined]
-    return "openai"
+    return "none"
 
 
 def _get_reasoning_style(decision: RoutingDecision, runtime: RuntimeState) -> str:
@@ -1467,6 +1469,8 @@ async def chat_completions(request: Request):
             body = dict(body)
             body["messages"] = compaction_result.messages
 
+        fallback_body_base = copy.deepcopy(body)
+
         # Replace the model field with the actual model name
         body["model"] = decision.model
 
@@ -1497,6 +1501,7 @@ async def chat_completions(request: Request):
             request_id=request_id,
             compaction_result=compaction_result,
             state=state,
+            fallback_body_base=fallback_body_base,
         )
 
         # Attach compaction headers

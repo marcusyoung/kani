@@ -75,7 +75,7 @@ class ProviderConfig(BaseModel):
     models: list[str] = Field(default_factory=list)  # optional model whitelist
     reasoning_style: Literal[
         "openai", "xai", "anthropic", "dashscope", "gemini", "none"
-    ] = "openai"
+    ] = "none"
 
 
 class ModelEntry(BaseModel):
@@ -352,7 +352,11 @@ class KaniConfig(BaseModel):
     @model_validator(mode="after")
     def _normalize_legacy_model_capabilities(self) -> "KaniConfig":
         """Use legacy model_capabilities as model_rules when model_rules is unset."""
-        if not self.model_rules and self.model_capabilities:
+        if self.model_rules and self.model_capabilities:
+            raise ValueError(
+                "Specify either model_rules or legacy model_capabilities, not both"
+            )
+        if self.model_capabilities:
             self.model_rules = self.model_capabilities
         return self
 

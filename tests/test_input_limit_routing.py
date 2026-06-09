@@ -110,6 +110,26 @@ class TestInputLimitConfig:
             ("object-model", "entry-provider"),
         ]
 
+    def test_model_rules_and_legacy_model_capabilities_are_mutually_exclusive(
+        self,
+    ) -> None:
+        with pytest.raises(ValueError, match="model_rules"):
+            KaniConfig(
+                providers={
+                    "default": ProviderConfig(
+                        name="default",
+                        base_url="https://default.example/v1",
+                    ),
+                },
+                default_provider="default",
+                profiles={"auto": ProfileConfig(tiers=_all_tiers("model"))},
+                default_profile="auto",
+                model_rules=[ModelCapabilityEntry(prefix="model")],
+                model_capabilities=[
+                    ModelCapabilityEntry(prefix="*", capabilities=["tools"])
+                ],
+            )
+
     def test_legacy_context_window_tokens_is_rejected(self) -> None:
         with pytest.raises(ValidationError, match="context_window_tokens"):
             TierModelConfig(
@@ -150,7 +170,10 @@ class TestInputLimitConfig:
 
 
 class TestInputLimitRouting:
-    def test_long_request_skips_too_small_primary(self) -> None:
+    def test_long_request_skips_too_small_primary(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("kani.router._estimate_tokens", lambda messages: 1000)
         cfg = _config(
             tiers=_all_tiers(
                 "unused",
@@ -169,7 +192,10 @@ class TestInputLimitRouting:
 
         assert decision.model == "large"
 
-    def test_unknown_max_input_tokens_remains_eligible(self) -> None:
+    def test_unknown_max_input_tokens_remains_eligible(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("kani.router._estimate_tokens", lambda messages: 1000)
         cfg = _config(
             tiers=_all_tiers(
                 "unused",
@@ -188,7 +214,32 @@ class TestInputLimitRouting:
 
         assert decision.model == "unknown-limit"
 
-    def test_fallback_can_satisfy_long_input(self) -> None:
+    def test_prompt_equal_to_max_input_tokens_remains_eligible(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("kani.router._estimate_tokens", lambda messages: 100)
+        cfg = _config(
+            tiers=_all_tiers(
+                "unused",
+                MEDIUM=TierModelConfig(
+                    primary=[
+                        {"model": "exact-fit", "max_input_tokens": 100},
+                        {"model": "large", "max_input_tokens": 99999},
+                    ],
+                ),
+            )
+        )
+        router = Router(cfg)
+        _force_tier(router, "MEDIUM")
+
+        decision = router.route(_messages(), profile="auto")
+
+        assert decision.model == "exact-fit"
+
+    def test_fallback_can_satisfy_long_input(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("kani.router._estimate_tokens", lambda messages: 1000)
         cfg = _config(
             tiers=_all_tiers(
                 "unused",
@@ -206,7 +257,10 @@ class TestInputLimitRouting:
         assert decision.model == "large-fallback"
         assert decision.fallbacks == []
 
-    def test_higher_tier_can_satisfy_long_input(self) -> None:
+    def test_higher_tier_does_not_silently_satisfy_long_input_without_capabilities(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("kani.router._estimate_tokens", lambda messages: 1000)
         cfg = _config(
             tiers={
                 "MEDIUM": TierModelConfig(
@@ -220,10 +274,38 @@ class TestInputLimitRouting:
         router = Router(cfg)
         _force_tier(router, "MEDIUM")
 
-        decision = router.route(_messages(), profile="auto")
+        with pytest.raises(InputLimitNotSatisfiedError) as exc_info:
+            router.route(_messages(), profile="auto")
 
-        assert decision.model == "large-complex"
-        assert decision.reasoning_effort is None
+        assert exc_info.value.tier == "MEDIUM"
+
+    def test_higher_tier_can_satisfy_capability_constrained_long_input(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("kani.router._estimate_tokens", lambda messages: 1000)
+        cfg = _config(
+            tiers={
+                "MEDIUM": TierModelConfig(
+                    primary=[{"model": "small-vision", "max_input_tokens": 4}]
+                ),
+                "COMPLEX": TierModelConfig(
+                    primary=[{"model": "large-vision", "max_input_tokens": 99999}]
+                ),
+            },
+            capabilities=[
+                ModelCapabilityEntry(prefix="small-vision", capabilities=["vision"]),
+                ModelCapabilityEntry(prefix="large-vision", capabilities=["vision"]),
+            ],
+        )
+        router = Router(cfg)
+        _force_tier(router, "MEDIUM")
+
+        decision = router.route(
+            _messages(), profile="auto", required_capabilities={"vision"}
+        )
+
+        assert decision.model == "large-vision"
+        assert decision.tier == "MEDIUM"
 
     def test_capability_filtering_remains_mandatory_with_large_input_limit_candidate(
         self,
@@ -251,7 +333,10 @@ class TestInputLimitRouting:
 
         assert decision.model == "large-vision"
 
-    def test_cooldown_applies_after_input_limit_filtering(self) -> None:
+    def test_cooldown_applies_after_input_limit_filtering(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("kani.router._estimate_tokens", lambda messages: 1000)
         cfg = _config(
             tiers=_all_tiers(
                 "unused",
@@ -275,7 +360,10 @@ class TestInputLimitRouting:
 
         assert decision.model == "large-ready"
 
-    def test_raises_when_all_known_limit_candidates_are_over_limit(self) -> None:
+    def test_raises_when_all_known_limit_candidates_are_over_limit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("kani.router._estimate_tokens", lambda messages: 1000)
         cfg = _config(
             tiers={
                 "MEDIUM": TierModelConfig(
@@ -297,7 +385,10 @@ class TestInputLimitRouting:
         assert exc_info.value.profile == "auto"
         assert exc_info.value.tier == "MEDIUM"
 
-    def test_cooldown_ignore_never_reintroduces_over_limit_candidate(self) -> None:
+    def test_cooldown_ignore_never_reintroduces_over_limit_candidate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("kani.router._estimate_tokens", lambda messages: 1000)
         cfg = _config(
             tiers=_all_tiers(
                 "unused",

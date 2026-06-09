@@ -278,6 +278,7 @@ def _tier_from_axes(
     semantic_labels: dict[str, str],
     thresholds: dict[str, float],
 ) -> Tier:
+    base_tier = _tier_from_score(score, thresholds)
     complexity_score = _semantic_axis_score(
         semantic_labels,
         [
@@ -299,18 +300,20 @@ def _tier_from_axes(
         ],
     )
 
+    axis_tier = Tier.SIMPLE
     if reasoning_score >= 0.75 or semantic_labels.get("reasoningMarkers") == "high":
-        return Tier.REASONING
-    if (
+        axis_tier = Tier.REASONING
+    elif (
         semantic_labels.get("agenticTask") == "high"
         and semantic_labels.get("imperativeVerbs") == "high"
     ):
-        return Tier.MEDIUM
-    if complexity_score >= 0.8:
-        return Tier.COMPLEX
-    if complexity_score >= 0.5:
-        return Tier.MEDIUM
-    return Tier.SIMPLE
+        axis_tier = Tier.MEDIUM
+    elif complexity_score >= 0.8:
+        axis_tier = Tier.COMPLEX
+    elif complexity_score >= 0.5:
+        axis_tier = Tier.MEDIUM
+
+    return max(base_tier, axis_tier, key=lambda tier: list(Tier).index(tier))
 
 
 class Scorer:
@@ -364,7 +367,6 @@ class Scorer:
             )
             if dim == "agenticTask":
                 agentic_score = value
-                continue
             total_weighted += weighted
             total_weight += weight
 
@@ -382,7 +384,7 @@ class Scorer:
         tier = _tier_from_axes(score, semantic_labels, _DEFAULT_THRESHOLDS)
 
         signals: dict[str, Any] = {
-            "method": {"raw": "distilled-features", "matches": 0},
+            "method": {"raw": "heuristic-features", "matches": 0},
             "tokenCount": token_count,
             "semanticLabels": semantic_labels,
             "featureVersion": "v1",

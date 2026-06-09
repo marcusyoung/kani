@@ -58,6 +58,7 @@ class FallbackEntry(BaseModel):
     provider: str
     base_url: str
     api_key: str = ""
+    max_input_tokens: int | None = None
 
 
 class RoutingDecision(BaseModel):
@@ -187,34 +188,54 @@ class Router:
             prompt_tokens,
         )
 
-        primary_candidates = self._eligible_primary_candidates(
+        primary_capable_candidates = self._capable_primary_candidates(
             tier_cfg,
             required_capabilities,
-            prompt_tokens=prompt_tokens,
         )
-
-        # If no eligible primary in current tier, try fallbacks before escalating.
-        fallback_candidates = self._eligible_fallback_candidates(
+        fallback_capable_candidates = self._capable_fallback_candidates(
             tier_cfg,
             required_capabilities,
+        )
+        any_capable_candidates = bool(
+            primary_capable_candidates or fallback_capable_candidates
+        )
+        primary_candidates = self._filter_input_limit_candidates(
+            primary_capable_candidates,
             prompt_tokens=prompt_tokens,
+            tier_provider=tier_cfg.provider,
+        )
+        fallback_candidates = self._filter_input_limit_candidates(
+            fallback_capable_candidates,
+            prompt_tokens=prompt_tokens,
+            tier_provider=tier_cfg.provider,
         )
 
-        if not primary_candidates and not fallback_candidates:
+        if required_capabilities and not primary_candidates and not fallback_candidates:
             current_tier = resolved_tier
             for tier_name in self._escalation_path(profile_cfg, current_tier):
                 escalated_cfg = profile_cfg.tiers.get(tier_name)
                 if escalated_cfg is None:
                     continue
-                escalated_primary = self._eligible_primary_candidates(
+                escalated_primary_capable = self._capable_primary_candidates(
                     escalated_cfg,
                     required_capabilities,
-                    prompt_tokens=prompt_tokens,
                 )
-                escalated_fallbacks = self._eligible_fallback_candidates(
+                escalated_fallbacks_capable = self._capable_fallback_candidates(
                     escalated_cfg,
                     required_capabilities,
+                )
+                any_capable_candidates = any_capable_candidates or bool(
+                    escalated_primary_capable or escalated_fallbacks_capable
+                )
+                escalated_primary = self._filter_input_limit_candidates(
+                    escalated_primary_capable,
                     prompt_tokens=prompt_tokens,
+                    tier_provider=escalated_cfg.provider,
+                )
+                escalated_fallbacks = self._filter_input_limit_candidates(
+                    escalated_fallbacks_capable,
+                    prompt_tokens=prompt_tokens,
+                    tier_provider=escalated_cfg.provider,
                 )
                 if escalated_primary or escalated_fallbacks:
                     resolved_tier = tier_name
@@ -223,7 +244,12 @@ class Router:
                     fallback_candidates = escalated_fallbacks
                     break
 
-        if not primary_candidates and not fallback_candidates and required_capabilities:
+        if (
+            not primary_candidates
+            and not fallback_candidates
+            and required_capabilities
+            and not any_capable_candidates
+        ):
             raise CapabilityNotSatisfiedError(required_capabilities)
 
         cooled_primary_candidates = self._filter_cooled_candidates(
@@ -308,6 +334,7 @@ class Router:
                     provider=fb_provider_name,
                     base_url=fb_provider_cfg.base_url,
                     api_key=resolve_env(fb_provider_cfg.api_key),
+                    max_input_tokens=fallback_candidate.max_input_tokens,
                 )
             )
 
@@ -399,17 +426,18 @@ class Router:
         provider_cfg = self._lookup_provider(provider_name)
 
         fallback_entries: list[FallbackEntry] = []
-        for fb_model, fb_provider in tier_cfg.resolve_fallbacks():
+        for fallback_candidate in tier_cfg.resolve_fallback_candidate_entries():
             fb_provider_name = self._resolve_provider_name(
-                fb_provider, tier_cfg.provider
+                fallback_candidate.provider, tier_cfg.provider
             )
             fb_provider_cfg = self._lookup_provider(fb_provider_name)
             fallback_entries.append(
                 FallbackEntry(
-                    model=fb_model,
+                    model=fallback_candidate.model,
                     provider=fb_provider_name,
                     base_url=fb_provider_cfg.base_url,
                     api_key=resolve_env(fb_provider_cfg.api_key),
+                    max_input_tokens=fallback_candidate.max_input_tokens,
                 )
             )
 
@@ -441,22 +469,39 @@ class Router:
             Set of capability strings (e.g., {'vision', 'tools', 'json_mode'}).
             Empty set if model not found in config.
         """
-        best_capabilities: list[str] | None = None
-        best_score: tuple[int, int] = (-1, -1)
+        capabilities: set[str] = set()
         for entry in self.config.model_rules:
             prefix_matches = entry.prefix == "*" or model_id.startswith(entry.prefix)
             if not prefix_matches:
                 continue
             if entry.provider and entry.provider != provider_name:
                 continue
-            score = (
-                1 if entry.provider else 0,
-                0 if entry.prefix == "*" else len(entry.prefix),
-            )
-            if score > best_score:
-                best_score = score
-                best_capabilities = entry.capabilities
-        return set(best_capabilities or [])
+            capabilities.update(entry.capabilities)
+        return capabilities
+
+    def _capable_primary_candidates(
+        self,
+        tier_cfg: Any,
+        required_capabilities: set[str],
+    ) -> list[ResolvedModelCandidate]:
+        """Return primary candidates that satisfy capability metadata."""
+        return self._filter_capable_candidates(
+            tier_cfg.resolve_primary_candidate_entries(),
+            required_capabilities,
+            tier_provider=tier_cfg.provider,
+        )
+
+    def _capable_fallback_candidates(
+        self,
+        tier_cfg: Any,
+        required_capabilities: set[str],
+    ) -> list[ResolvedModelCandidate]:
+        """Return fallback candidates that satisfy capability metadata."""
+        return self._filter_capable_candidates(
+            tier_cfg.resolve_fallback_candidate_entries(),
+            required_capabilities,
+            tier_provider=tier_cfg.provider,
+        )
 
     def _eligible_primary_candidates(
         self,
@@ -466,11 +511,8 @@ class Router:
         prompt_tokens: int,
     ) -> list[ResolvedModelCandidate]:
         """Return primary candidates that satisfy capability and input-limit metadata."""
-        candidates = tier_cfg.resolve_primary_candidate_entries()
-        capable_candidates = self._filter_capable_candidates(
-            candidates,
-            required_capabilities,
-            tier_provider=tier_cfg.provider,
+        capable_candidates = self._capable_primary_candidates(
+            tier_cfg, required_capabilities
         )
         return self._filter_input_limit_candidates(
             capable_candidates,
@@ -486,11 +528,8 @@ class Router:
         prompt_tokens: int,
     ) -> list[ResolvedModelCandidate]:
         """Return fallback candidates that satisfy capability and input-limit metadata."""
-        candidates = tier_cfg.resolve_fallback_candidate_entries()
-        capable_candidates = self._filter_capable_candidates(
-            candidates,
-            required_capabilities,
-            tier_provider=tier_cfg.provider,
+        capable_candidates = self._capable_fallback_candidates(
+            tier_cfg, required_capabilities
         )
         return self._filter_input_limit_candidates(
             capable_candidates,

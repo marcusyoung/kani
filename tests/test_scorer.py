@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from kani.scorer import ClassificationResult, Scorer, Tier
+from kani.scorer import ClassificationResult, Scorer, ScoringConfig, Tier
 
 
 class _StubFeatureClassifier:
@@ -80,7 +80,7 @@ class TestDistilledFeatureScorer:
 
         embeddings_create.assert_not_called()
         assert isinstance(result, ClassificationResult)
-        assert result.signals["method"]["raw"] == "distilled-features"
+        assert result.signals["method"]["raw"] == "heuristic-features"
         assert result.signals["featureVersion"] == "v1"
         assert isinstance(result.signals["semanticLabels"], dict)
         assert len(result.dimensions) == 15
@@ -103,7 +103,23 @@ class TestDistilledFeatureScorer:
     def test_simple_prompt_still_has_full_dimension_shape(self) -> None:
         result = Scorer(enable_routing_log=False).classify("hello")
 
-        assert result.signals["method"]["raw"] == "distilled-features"
+        assert result.signals["method"]["raw"] == "heuristic-features"
         assert result.confidence > 0.0
         assert result.score >= 0.0
         assert len(result.dimensions) == 15
+
+    def test_configured_fallback_when_runtime_classifier_fails(self) -> None:
+        config = ScoringConfig(fallback_tier=Tier.MEDIUM, fallback_confidence=0.31)
+        with patch(
+            "kani.scorer._heuristic_semantic_labels", side_effect=RuntimeError("boom")
+        ):
+            result = Scorer(config=config, enable_routing_log=False).classify(
+                "anything"
+            )
+
+        assert result.tier == Tier.MEDIUM
+        assert result.confidence == 0.31
+        assert result.score == 0.0
+        assert result.signals["method"]["raw"] == "default"
+        assert result.agentic_score == 0.0
+        assert result.dimensions == []

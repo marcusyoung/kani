@@ -250,6 +250,24 @@ class TestCapabilityFiltering:
         assert "vision" in caps
         assert "tools" in caps
 
+    def test_get_model_capabilities_merges_all_matching_rules(self) -> None:
+        """Wildcard/base capabilities should compose with specific rules."""
+        config = self._make_config(
+            model_capabilities=[
+                ModelCapabilityEntry(prefix="*", capabilities=["tools"]),
+                ModelCapabilityEntry(
+                    prefix="gpt-4o",
+                    provider="default",
+                    capabilities=["vision", "json_mode"],
+                ),
+            ]
+        )
+        router = Router(config)
+
+        caps = router._get_model_capabilities("gpt-4o", "default")
+
+        assert caps == {"tools", "vision", "json_mode"}
+
     def test_get_model_capabilities_unknown_model(self) -> None:
         """Unknown models should return empty capability set."""
         config = self._make_config()

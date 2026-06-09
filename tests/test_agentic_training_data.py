@@ -3,9 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from kani.classification_context import DEFAULT_CLASSIFICATION_INPUT_MAX_CHARS
+from kani.scorer import SEMANTIC_DIMENSIONS
 from kani.training_data import (
+    ANNOTATION_PROMPT_MAX_CHARS,
     LLMFeatureAnnotator,
+    SEMANTIC_DIMENSION_CALIBRATION,
     _classification_prompt_from_record,
+    _semantic_dimension_calibration_text,
     build_feature_dataset,
     deterministic_token_count,
     extract_distilled_feature_examples,
@@ -44,6 +49,42 @@ def _labels(agentic: str = "medium") -> dict[str, str]:
 def test_deterministic_token_count() -> None:
     assert deterministic_token_count("hello world") == 2
     assert deterministic_token_count("") == 1
+
+
+def test_semantic_dimension_calibration_covers_every_dimension() -> None:
+    assert set(SEMANTIC_DIMENSION_CALIBRATION) == set(SEMANTIC_DIMENSIONS)
+    for dim in SEMANTIC_DIMENSIONS:
+        labels = SEMANTIC_DIMENSION_CALIBRATION[dim]
+        assert set(labels) == {"low", "medium", "high"}
+        assert all(labels[label].strip() for label in ("low", "medium", "high"))
+
+
+def test_semantic_dimension_calibration_text_includes_representative_guidance() -> None:
+    text = _semantic_dimension_calibration_text()
+
+    assert "- codePresence:" in text
+    assert "Contains code blocks" in text
+    assert "- reasoningMarkers:" in text
+    assert "root-cause analysis" in text
+    assert "- agenticTask:" in text
+    assert "autonomous implementation" in text
+
+
+def test_llm_feature_annotator_prompt_includes_calibration_and_json_contract() -> None:
+    prompt = LLMFeatureAnnotator._PROMPT_TEMPLATE.format(prompt="Fix the test")
+
+    assert "Return JSON object only with exactly these keys:" in prompt
+    assert "Each value must be one of: low, medium, high" in prompt
+    assert "Do not include any explanation or markdown" in prompt
+    assert "Fix the test" in prompt
+    keys_intro = prompt.split("Return JSON object only with exactly these keys: ", 1)[1]
+    declared_keys = keys_intro.split(". Each value must be", 1)[0].split(", ")
+    assert declared_keys == list(SEMANTIC_DIMENSIONS)
+    for dim in SEMANTIC_DIMENSIONS:
+        assert dim in prompt
+    assert "- codePresence:" in prompt
+    assert "- reasoningMarkers:" in prompt
+    assert "- agenticTask:" in prompt
 
 
 def test_extract_distilled_feature_examples_prefers_log_labels_and_dedupes() -> None:
@@ -145,6 +186,67 @@ def test_build_feature_dataset_persists_examples(tmp_path: Path) -> None:
     assert persisted == examples
 
 
+def test_llm_feature_annotator_accepts_valid_labels_and_ignores_extra_json_keys(
+    monkeypatch,
+) -> None:
+    class _Response:
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {**_labels("high"), "extra": "ignored"}
+                            )
+                        }
+                    }
+                ]
+            }
+
+    def _post(*args, **kwargs):
+        return _Response()
+
+    monkeypatch.setattr("kani.training_data.httpx.post", _post)
+
+    labels = LLMFeatureAnnotator(api_key="test-key").annotate("Implement feature")
+
+    assert labels == _labels("high")
+
+
+def test_llm_feature_annotator_rejects_missing_or_invalid_labels(monkeypatch) -> None:
+    responses = iter(
+        [
+            json.dumps(
+                {key: value for key, value in _labels().items() if key != "agenticTask"}
+            ),
+            json.dumps({**_labels(), "agenticTask": "extreme"}),
+        ]
+    )
+
+    class _Response:
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"choices": [{"message": {"content": next(responses)}}]}
+
+    def _post(*args, **kwargs):
+        return _Response()
+
+    monkeypatch.setattr("kani.training_data.httpx.post", _post)
+    annotator = LLMFeatureAnnotator(api_key="test-key")
+
+    assert annotator.annotate("Implement feature") is None
+    assert annotator.annotate("Implement feature") is None
+
+
 def test_llm_feature_annotator_uses_provider_resolved_config_defaults(
     monkeypatch,
 ) -> None:
@@ -170,6 +272,79 @@ def test_llm_feature_annotator_uses_provider_resolved_config_defaults(
     assert annotator.model == "gemini-2.5-flash-lite"
     assert annotator.base_url == "http://127.0.0.1:8317/v1"
     assert annotator.api_key == "test-key"
+
+
+class _AnnotatorResponse:
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {dimension: "low" for dimension in SEMANTIC_DIMENSIONS}
+                        )
+                    }
+                }
+            ]
+        }
+
+
+def _capture_annotation_prompt(monkeypatch, prompt: str) -> str:
+    captured: dict[str, object] = {}
+
+    def _post(*args: object, **kwargs: object) -> _AnnotatorResponse:
+        captured["json"] = kwargs["json"]
+        return _AnnotatorResponse()
+
+    monkeypatch.setattr("kani.training_data.httpx.post", _post)
+    annotator = LLMFeatureAnnotator(
+        model="test-model",
+        base_url="http://annotator.example/v1",
+        api_key="test-key",
+    )
+
+    labels = annotator.annotate(prompt)
+
+    assert labels == {dimension: "low" for dimension in SEMANTIC_DIMENSIONS}
+    request_json = captured["json"]
+    assert isinstance(request_json, dict)
+    messages = request_json["messages"]
+    assert isinstance(messages, list)
+    message = messages[0]
+    assert isinstance(message, dict)
+    content = message["content"]
+    assert isinstance(content, str)
+    return content.split("Prompt:\n", 1)[1]
+
+
+def test_annotation_prompt_limit_matches_runtime_classification_default() -> None:
+    assert ANNOTATION_PROMPT_MAX_CHARS == DEFAULT_CLASSIFICATION_INPUT_MAX_CHARS
+
+
+def test_llm_feature_annotator_bounds_prompt_at_runtime_classification_default(
+    monkeypatch,
+) -> None:
+    prompt = "a" * (DEFAULT_CLASSIFICATION_INPUT_MAX_CHARS + 300)
+
+    sent_prompt = _capture_annotation_prompt(monkeypatch, prompt)
+
+    assert len(sent_prompt) == ANNOTATION_PROMPT_MAX_CHARS
+    assert sent_prompt == prompt[:ANNOTATION_PROMPT_MAX_CHARS]
+
+
+def test_llm_feature_annotator_does_not_truncate_prompt_at_2000(
+    monkeypatch,
+) -> None:
+    prompt = "a" * 2000 + "b" * 100
+
+    sent_prompt = _capture_annotation_prompt(monkeypatch, prompt)
+
+    assert len(sent_prompt) == len(prompt)
+    assert sent_prompt == prompt
+    assert sent_prompt[2000:] == "b" * 100
 
 
 def test_checkpoint_resumes_and_skips_already_annotated(tmp_path: Path) -> None:

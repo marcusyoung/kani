@@ -18,5 +18,10 @@ Re-annotating historical logs and retraining classifier artifacts is intentional
 
 Expected archive gate: `cflx openspec validate calibrate-feature-annotator --archive-gate`.
 
-## Acceptance #1 Failure Follow-up
-- [x] Archive readiness blocker: `cflx openspec validate calibrate-feature-annotator --archive-gate` exits 1 with `calibrate-feature-annotator: tasks.md:11: Behavior-bearing task missing '(verification: ...)' note`. The blocking file/path is `openspec/changes/calibrate-feature-annotator/tasks.md:11`; update the task wording to satisfy the archive-gate verification-note requirement before acceptance can PASS.
+## Acceptance Failure Follow-up
+
+- [x] Rewrite acceptance failure evidence as non-checkbox status text so archive validation remains the authoritative final gate (verification: unit/manual - `uv run pytest tests/test_agentic_training_data.py -q` passes after preserving the prompt key-contract regression test, and the acceptance evidence below no longer contains a self-referential checkbox task).
+
+Status evidence: Acceptance #1 found `cflx openspec validate calibrate-feature-annotator --archive-gate` exiting 1 with `calibrate-feature-annotator: tasks.md:11: Behavior-bearing task missing '(verification: ...)' note`. That wording has been corrected in the implementation task list above.
+
+Status evidence: Acceptance #2 found `agent-exec run -- cflx openspec validate calibrate-feature-annotator --archive-gate` exiting 1 with `calibrate-feature-annotator: tasks.md:22: self-referential final OpenSpec validation checkbox detected. Final OpenSpec validation must not be a checkbox task; move final validation to a non-checkbox ## Final Validation section because archive validation is the authoritative gate.` The prior self-referential checkbox has been replaced by non-checkbox status evidence here.

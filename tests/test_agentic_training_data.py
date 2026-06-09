@@ -75,6 +75,9 @@ def test_llm_feature_annotator_prompt_includes_calibration_and_json_contract() -
     assert "Each value must be one of: low, medium, high" in prompt
     assert "Do not include any explanation or markdown" in prompt
     assert "Fix the test" in prompt
+    keys_intro = prompt.split("Return JSON object only with exactly these keys: ", 1)[1]
+    declared_keys = keys_intro.split(". Each value must be", 1)[0].split(", ")
+    assert declared_keys == list(SEMANTIC_DIMENSIONS)
     for dim in SEMANTIC_DIMENSIONS:
         assert dim in prompt
     assert "- codePresence:" in prompt

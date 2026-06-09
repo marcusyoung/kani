@@ -100,6 +100,8 @@ YAML 設定ファイルの読み込み、環境変数プレースホルダーの
   - `profiles` (dict[str, ProfileConfig])
   - `default_profile` (str, デフォルト: "auto")
   - `llm_classifier` (LLMClassifierConfig | None)
+  - `model_rules` (list[ModelRuleEntry])
+  - `model_capabilities` (legacy list[ModelRuleEntry])
 
 #### Scenario: プロバイダ設定
 
@@ -159,6 +161,39 @@ YAML 設定ファイルの読み込み、環境変数プレースホルダーの
 - WHEN 設定を読み込む
 - THEN システムはこの compaction 設定を従来通り受理する
 - AND この値を per-model `max_input_tokens` として扱ってはならない
+
+### Requirement: モデルメタデータ規則
+
+`model_rules` は prefix-based model metadata の primary configuration surface でなければならない (SHALL)。`model_capabilities` は legacy compatibility alias としてのみ扱われなければならない (SHALL)。
+
+#### Scenario: model_rules primary metadata
+
+- GIVEN `model_rules` に prefix, capabilities, reasoning_style, provider filter が設定されている
+- WHEN 設定を読み込む
+- THEN システムは `model_rules` をモデルメタデータ規則として保持する
+- AND capability filtering と reasoning_style override は `model_rules` を参照する
+
+#### Scenario: legacy model_capabilities alias
+
+- GIVEN `model_rules` が未設定である
+- AND `model_capabilities` に legacy capability entries が設定されている
+- WHEN 設定を読み込む
+- THEN システムは `model_capabilities` を `model_rules` に正規化する
+- AND `model_capabilities` は後方互換の legacy alias として扱われる
+
+#### Scenario: model_rules and legacy alias are mutually exclusive
+
+- GIVEN `model_rules` と `model_capabilities` の両方が設定されている
+- WHEN 設定を検証する
+- THEN システムは曖昧なメタデータ設定として拒否する
+
+#### Scenario: required capabilities fail closed
+
+- GIVEN リクエストが `vision`, `tools`, または `json_mode` の capability を要求する
+- AND 設定済み候補のどれも要求 capability set を宣言していない
+- WHEN ルーティング候補を capability filtering する
+- THEN システムは capability 不足候補を選択してはならない
+- AND 利用可能な候補がない場合は capability-satisfied candidate がないことを示すエラーで fail closed する
 
 ### Requirement: オーバーライド
 

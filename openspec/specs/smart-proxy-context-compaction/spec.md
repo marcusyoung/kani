@@ -50,8 +50,17 @@ kani MUST expose switchable controls and operator-visible telemetry for smart-pr
 
 **Given** a client sends the configured session header
 **When** kani resolves session identity for smart-proxy compaction
-**Then** kani MUST prefer the explicit header over derived identifiers
-**And** kani MUST make the resolution mode observable for operators
+**Then** kani MUST use the explicit header as the session identifier
+**And** kani MUST make the explicit resolution mode observable for operators
+
+#### Scenario: No session header means no session identity
+
+**Given** a client does not send the configured session header
+**When** kani resolves session identity for smart-proxy compaction
+**Then** kani MUST NOT derive a replacement session identifier from model or message content
+**And** kani MUST expose that no session identity was resolved
+**And** inline compaction MAY still run for an oversized request
+**And** cache reuse, persistence, incremental summarization, and background precompaction MUST be unavailable for that request because they require a stable session identifier
 
 #### Scenario: Compaction failures do not break proxying
 

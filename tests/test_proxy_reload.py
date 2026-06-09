@@ -255,6 +255,12 @@ class TestReasoningContentCompatibility:
             )
 
         assert supported is False
+        warning_records = [
+            record
+            for record in caplog.records
+            if record.name == "kani.proxy" and record.levelname == "WARNING"
+        ]
+        assert len(warning_records) == 1
         assert "Unknown provider for reasoning_content support fallback" in caplog.text
         assert "missing-provider" in caplog.text
         assert "unknown-model" in caplog.text

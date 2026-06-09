@@ -261,6 +261,11 @@ class TestReasoningContentCompatibility:
             if record.name == "kani.proxy" and record.levelname == "WARNING"
         ]
         assert len(warning_records) == 1
+        assert warning_records[0].name == "kani.proxy"
+        assert warning_records[0].getMessage() == (
+            "Unknown provider for reasoning_content support fallback "
+            "model=unknown-model provider=missing-provider"
+        )
         assert "Unknown provider for reasoning_content support fallback" in caplog.text
         assert "missing-provider" in caplog.text
         assert "unknown-model" in caplog.text

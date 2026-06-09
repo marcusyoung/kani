@@ -17,3 +17,7 @@ Implementation proposals may be needed if the audit discovers code behavior that
 ## Final Validation
 
 Expected archive gate: `cflx openspec validate audit-routing-docs --archive-gate`.
+
+## Acceptance #1 Failure Follow-up
+- [x] OpenSpec/要件側の主要確認は通過しています: `cflx openspec validate audit-routing-docs --strict` と `cflx openspec validate audit-routing-docs --archive-gate` は Validation passed。README/config/spec は `model_rules` primary、legacy `model_capabilities`、capability fail-closed、provider precedence、literal model ID、no-header compaction behavior を記述しています。再検証で `tasks.md` に unchecked `- [ ]` が残らない状態に更新しました。
+- [x] コミットパスの pre-commit hook blocker を解消しました。`tests/test_proxy_reload.py` の `ruff format` 変更を保持し、`agent-exec run -- prek run --all-files` を再実行して ruff / ruff format が Passed、job `a1cf754916d64453f02edeaba3dc9be5` が exit_code 0 で完了したことを確認しました。

@@ -24,7 +24,6 @@ def _config_text(
     fallback_backoff_enabled: bool = False,
     input_limit_too_small: bool = False,
 ) -> str:
-
     alt_profile = ""
     if include_alt_profile:
         alt_profile = """

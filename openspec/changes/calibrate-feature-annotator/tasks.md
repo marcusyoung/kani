@@ -8,7 +8,7 @@
 
 - [x] Confirm runtime routing/proxy behavior is unchanged. Verification: unit/manual - run existing relevant scorer/router/proxy tests or a targeted unchanged-behavior subset after the prompt-only change. Completion condition: runtime tests pass without changing routing thresholds, proxy payloads, or scorer outputs.
 
-- [x] Run targeted and relevant project checks after implementation. Verification: manual - run targeted pytest for training-data/annotator tests; run ruff/pyright if Python code changed. Completion condition: command output shows no failures.
+- [x] Run targeted and relevant project checks after implementation (verification: manual - run targeted pytest for training-data/annotator tests; run ruff/pyright if Python code changed). Completion condition: command output shows no failures.
 
 ## Future Work
 
@@ -17,3 +17,6 @@ Re-annotating historical logs and retraining classifier artifacts is intentional
 ## Final Validation
 
 Expected archive gate: `cflx openspec validate calibrate-feature-annotator --archive-gate`.
+
+## Acceptance #1 Failure Follow-up
+- [x] Archive readiness blocker: `cflx openspec validate calibrate-feature-annotator --archive-gate` exits 1 with `calibrate-feature-annotator: tasks.md:11: Behavior-bearing task missing '(verification: ...)' note`. The blocking file/path is `openspec/changes/calibrate-feature-annotator/tasks.md:11`; update the task wording to satisfy the archive-gate verification-note requirement before acceptance can PASS.

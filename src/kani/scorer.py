@@ -257,7 +257,7 @@ def _tier_from_axes(
         ],
     )
 
-    if reasoning_score >= 0.5 and reasoning_score >= complex_score:
+    if reasoning_score >= 0.75 and reasoning_score >= complex_score:
         return Tier.REASONING
     return Tier.COMPLEX
 
@@ -338,7 +338,12 @@ class Scorer:
             semantic_labels,
             feature_clf.weights,
         )
-        tier = _tier_from_axes(score, semantic_labels, feature_clf.tier_thresholds)
+        overridden_thresholds = {
+            "SIMPLE": feature_clf.tier_thresholds.get("SIMPLE", 0.20),
+            "MEDIUM": 0.55,
+            "COMPLEX": 0.75,
+        }
+        tier = _tier_from_axes(score, semantic_labels, overridden_thresholds)
 
         signals: dict[str, Any] = {
             "method": {"raw": "distilled-features", "matches": 0},

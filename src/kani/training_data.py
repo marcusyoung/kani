@@ -219,6 +219,8 @@ class LLMFeatureAnnotator:
                 "KANI_LLM_ANNOTATOR_API_KEY or OPENROUTER_API_KEY is required"
             )
 
+        user_text = prompt[:ANNOTATION_PROMPT_MAX_CHARS]
+
         max_retries = 5
         base_delay = 2.0
         for attempt in range(max_retries):
@@ -238,7 +240,7 @@ class LLMFeatureAnnotator:
                             },
                             {
                                 "role": "user",
-                                "content": prompt[:3500],
+                                "content": user_text,
                             },
                         ],
                         "temperature": 0.0,

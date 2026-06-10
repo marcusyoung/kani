@@ -152,7 +152,7 @@ class LLMFeatureAnnotator:
     """Offline annotator that labels semantic dimensions with an LLM."""
 
     _SYSTEM_PROMPT = (
-        "You are a prompt classifier for routing distillation. "
+        "You are a prompt classifier for llm model routing distillation. "
         "Return ONLY a JSON object with exactly these keys: "
         f"{', '.join(SEMANTIC_DIMENSIONS)}. "
         "Each value MUST be one of: low, medium, high. "

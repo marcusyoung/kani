@@ -7,7 +7,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from kani.config import EmbeddingConfig, KaniConfig, ProviderConfig
 from kani.feature_training import (
+    build_embedding_client,
     load_feature_examples,
     load_or_compute_embeddings,
     train_feature_classifier,
@@ -88,6 +90,45 @@ def test_load_or_compute_embeddings_cache_key_includes_model(tmp_path: Path) -> 
     assert first.tolist() == [[1.0, 2.0]]
     assert second.tolist() == [[3.0, 4.0]]
     assert len(list(cache_dir.glob("embeddings_*.npy"))) == 2
+
+
+def test_build_embedding_client_raises_when_embedding_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = KaniConfig(
+        providers={
+            "default": ProviderConfig(
+                name="default",
+                base_url="https://api.example.com/v1",
+                api_key="test-key",
+            )
+        },
+        default_provider="default",
+        embedding=EmbeddingConfig(enabled=False),
+    )
+    monkeypatch.setattr("kani.feature_training.load_config", lambda: cfg)
+
+    with pytest.raises(RuntimeError, match="Embedding is disabled in config"):
+        build_embedding_client()
+
+
+def test_build_embedding_client_uses_enabled_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = KaniConfig(
+        embedding=EmbeddingConfig(
+            enabled=True,
+            model="embedding-model",
+            base_url="https://embeddings.example/v1",
+            api_key="embedding-key",
+        )
+    )
+    monkeypatch.setattr("kani.feature_training.load_config", lambda: cfg)
+
+    client, model = build_embedding_client()
+
+    assert model == "embedding-model"
+    assert str(client.base_url) == "https://embeddings.example/v1/"
 
 
 def test_train_feature_classifier_writes_model_bundle(

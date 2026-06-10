@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -73,13 +73,36 @@ class ProviderConfig(BaseModel):
     base_url: str  # e.g. 'https://openrouter.ai/api/v1'
     api_key: str = ""  # can reference env var with ${ENV_VAR}
     models: list[str] = Field(default_factory=list)  # optional model whitelist
+    reasoning_style: Literal[
+        "openai", "xai", "anthropic", "dashscope", "gemini", "none"
+    ] = "none"
+    supports_reasoning_content: bool = False
 
 
 class ModelEntry(BaseModel):
-    """A model with optional provider override."""
+    """A model with optional routing metadata and provider override."""
+
+    model_config = ConfigDict(extra="forbid")
 
     model: str
     provider: str = ""  # empty = inherit from tier or default
+    max_input_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        description="Optional maximum input prompt tokens for routing eligibility.",
+    )
+
+
+class ResolvedModelCandidate(BaseModel):
+    """A normalized model candidate with preserved routing metadata."""
+
+    model: str
+    provider: str = ""
+    max_input_tokens: int | None = None
+
+    def as_tuple(self) -> tuple[str, str]:
+        """Return the backward-compatible (model, provider) tuple."""
+        return self.model, self.provider
 
 
 class TierModelConfig(BaseModel):
@@ -88,6 +111,9 @@ class TierModelConfig(BaseModel):
     primary: str | ModelEntry | list[str | ModelEntry]
     fallback: list[str | ModelEntry] = Field(default_factory=list)
     provider: str = "default"  # tier-level default provider
+    reasoning_effort: str | None = (
+        None  # low | medium | high | none (tier-level override)
+    )
 
     @model_validator(mode="after")
     def _validate_primary_not_empty(self) -> "TierModelConfig":
@@ -96,35 +122,42 @@ class TierModelConfig(BaseModel):
             raise ValueError("primary must contain at least one candidate")
         return self
 
-    def resolve_primary_candidates(self) -> list[tuple[str, str]]:
-        """Return ordered list of (model_id, provider_name) primary candidates."""
+    def resolve_primary_candidate_entries(self) -> list[ResolvedModelCandidate]:
+        """Return ordered primary candidates with routing metadata preserved."""
         primary_entries: list[str | ModelEntry]
         if isinstance(self.primary, list):
             primary_entries = self.primary
         else:
             primary_entries = [self.primary]
 
-        result: list[tuple[str, str]] = []
-        for entry in primary_entries:
-            if isinstance(entry, ModelEntry):
-                result.append((entry.model, entry.provider))
-            else:
-                result.append((entry, ""))
-        return result
+        return [self._resolve_candidate_entry(entry) for entry in primary_entries]
+
+    def resolve_primary_candidates(self) -> list[tuple[str, str]]:
+        """Return ordered list of (model_id, provider_name) primary candidates."""
+        return [entry.as_tuple() for entry in self.resolve_primary_candidate_entries()]
 
     def resolve_primary(self) -> tuple[str, str]:
         """Return first primary candidate for backward compatibility."""
         return self.resolve_primary_candidates()[0]
 
+    def resolve_fallback_candidate_entries(self) -> list[ResolvedModelCandidate]:
+        """Return fallback candidates with routing metadata preserved."""
+        return [self._resolve_candidate_entry(entry) for entry in self.fallback]
+
     def resolve_fallbacks(self) -> list[tuple[str, str]]:
         """Return list of (model_id, provider_name) tuples."""
-        result: list[tuple[str, str]] = []
-        for entry in self.fallback:
-            if isinstance(entry, ModelEntry):
-                result.append((entry.model, entry.provider))
-            else:
-                result.append((entry, ""))
-        return result
+        return [entry.as_tuple() for entry in self.resolve_fallback_candidate_entries()]
+
+    @staticmethod
+    def _resolve_candidate_entry(entry: str | ModelEntry) -> ResolvedModelCandidate:
+        """Normalize string/object candidate entries without losing metadata."""
+        if isinstance(entry, ModelEntry):
+            return ResolvedModelCandidate(
+                model=entry.model,
+                provider=entry.provider,
+                max_input_tokens=entry.max_input_tokens,
+            )
+        return ResolvedModelCandidate(model=entry)
 
     def primary_model_id(self) -> str:
         """Return first primary model ID (for backward compat)."""
@@ -173,6 +206,7 @@ class FeatureAnnotatorConfig(_AuxLLMConfigBase):
 class EmbeddingConfig(BaseModel):
     """Configuration for embedding API used by training and scoring."""
 
+    enabled: bool = True
     model: str = "text-embedding-3-small"
     provider: str = ""
     base_url: str = ""
@@ -257,13 +291,21 @@ class SmartProxyConfig(BaseModel):
     )
 
 
-class ModelCapabilityEntry(BaseModel):
-    """Model capability declaration using prefix-based matching."""
+class ModelRuleEntry(BaseModel):
+    """Model rule declaration using prefix matching."""
 
     prefix: str  # e.g. 'claude-', 'gpt-4', 'google/gemini'
+    provider: str = ""  # optional provider filter; empty matches any provider
     capabilities: list[str] = Field(
         default_factory=list
     )  # e.g. ['vision', 'tools', 'json_mode']
+    reasoning_style: (
+        Literal["openai", "xai", "anthropic", "dashscope", "gemini", "none"] | None
+    ) = None
+    supports_reasoning_content: bool | None = None
+
+
+ModelCapabilityEntry = ModelRuleEntry
 
 
 def _resolve_provider_for_aux_llm(
@@ -306,7 +348,19 @@ class KaniConfig(BaseModel):
     feature_annotator: FeatureAnnotatorConfig | None = None
     embedding: EmbeddingConfig | None = None
     smart_proxy: SmartProxyConfig = Field(default_factory=SmartProxyConfig)
-    model_capabilities: list[ModelCapabilityEntry] = Field(default_factory=list)
+    model_rules: list[ModelRuleEntry] = Field(default_factory=list)
+    model_capabilities: list[ModelRuleEntry] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _normalize_legacy_model_capabilities(self) -> "KaniConfig":
+        """Use legacy model_capabilities as model_rules when model_rules is unset."""
+        if self.model_rules and self.model_capabilities:
+            raise ValueError(
+                "Specify either model_rules or legacy model_capabilities, not both"
+            )
+        if self.model_capabilities:
+            self.model_rules = self.model_capabilities
+        return self
 
     @model_validator(mode="after")
     def _validate_aux_llm_provider_resolution(self) -> "KaniConfig":
@@ -365,7 +419,7 @@ class KaniConfig(BaseModel):
     def embedding_resolved(self) -> tuple[str, str] | None:
         """Return (base_url, api_key) resolved from embedding.provider/default_provider."""
 
-        if self.embedding is None:
+        if self.embedding is None or not self.embedding.enabled:
             return None
         if self.embedding.base_url:
             return self.embedding.base_url, self.embedding.api_key

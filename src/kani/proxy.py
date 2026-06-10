@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -58,6 +59,7 @@ from kani.fallback_backoff import FallbackBackoffState
 from kani.router import (
     CapabilityNotSatisfiedError,
     FallbackEntry,
+    InputLimitNotSatisfiedError,
     Router,
     RoutingDecision,
 )
@@ -336,6 +338,20 @@ def _kani_headers(
         "X-Kani-Score": f"{decision.score:.4f}",
         "X-Kani-Signals": json.dumps(decision.signals) if decision.signals else "{}",
     }
+
+
+def _parse_upstream_json(text: str) -> dict[str, Any]:
+    """Parse JSON, tolerating an erroneous trailing SSE DONE marker."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        data, idx = json.JSONDecoder().raw_decode(text)
+        trailing = text[idx:].strip()
+        if trailing != "data: [DONE]":
+            raise
+        if not isinstance(data, dict):
+            raise TypeError("Upstream JSON root must be an object")
+        return data
 
 
 def _get_default_provider_info(state: RuntimeState) -> tuple[str, str, str]:
@@ -627,7 +643,14 @@ async def _proxy_upstream(
                     f"Upstream error: {resp.text[:500]}",
                     "upstream_error",
                 )
-            resp_data = resp.json()
+            try:
+                resp_data = _parse_upstream_json(resp.text)
+            except Exception:
+                return _openai_error(
+                    resp.status_code,
+                    f"Upstream returned non-JSON: {resp.text[:500]}",
+                    "upstream_error",
+                )
             successful_failure = _parse_successful_failure(resp_data)
             if successful_failure is not None:
                 status_code, message, error_type = successful_failure
@@ -769,15 +792,19 @@ async def _try_with_fallbacks(
     request_id: str | None = None,
     compaction_result: CompactionResult | None = None,
     state: RuntimeState | None = None,
+    fallback_body_base: dict[str, Any] | None = None,
 ) -> StreamingResponse | JSONResponse:
     """Try primary, then fallbacks on failure."""
     runtime = state or _require_runtime_state()
 
     # Try primary
+    primary_body = _sanitize_reasoning_content_for_candidate(
+        body, decision.model, decision.provider, runtime
+    )
     result = await _proxy_upstream(
         decision.base_url.rstrip("/"),
         decision.api_key or "",
-        body,
+        primary_body,
         decision,
         profile=profile,
         actual_provider=decision.provider,
@@ -822,8 +849,32 @@ async def _try_with_fallbacks(
             decision.model,
             original_idx,
         )
-        fb_body = dict(body)
+        fb_body_base = fallback_body_base if fallback_body_base is not None else body
+        fb_body = copy.deepcopy(fb_body_base)
         fb_body["model"] = fb.model
+        # Restyle from a body without primary-provider proxy-injected reasoning controls.
+        if decision.reasoning_effort:
+            fb_style = _get_reasoning_style_for_candidate(
+                fb.model, fb.provider, runtime
+            )
+            fb_normalized_effort = _normalize_reasoning_effort(
+                fb_style, decision.reasoning_effort
+            )
+            fb_body = _apply_reasoning_for_style(
+                fb_body, fb_style, effort=decision.reasoning_effort
+            )
+            logger.info(
+                "REASONING_CONTROL injected (fallback) request_id=%s tier=%s style=%s original_effort=%s normalized_effort=%s provider=%s",
+                request_id,
+                decision.tier,
+                fb_style,
+                decision.reasoning_effort,
+                fb_normalized_effort,
+                fb.provider,
+            )
+        fb_body = _sanitize_reasoning_content_for_candidate(
+            fb_body, fb.model, fb.provider, runtime
+        )
         result = await _proxy_upstream(
             fb.base_url.rstrip("/"),
             fb.api_key or "",
@@ -851,6 +902,237 @@ async def _try_with_fallbacks(
 
     # All failed, return last error
     return result
+
+
+# ── Reasoning control injection helpers ───────────────────────────────────────
+
+
+def _get_model_reasoning_style(
+    model: str, provider_name: str, runtime: RuntimeState
+) -> str | None:
+    """Return model-specific reasoning_style override using prefix/provider matching."""
+    best_style: str | None = None
+    best_score: tuple[int, int] = (-1, -1)
+    for entry in runtime.config.model_rules:
+        prefix_matches = entry.prefix == "*" or model.startswith(entry.prefix)
+        if not prefix_matches:
+            continue
+        if entry.provider and entry.provider != provider_name:
+            continue
+        if not entry.reasoning_style:
+            continue
+        score = (
+            1 if entry.provider else 0,
+            0 if entry.prefix == "*" else len(entry.prefix),
+        )
+        if score > best_score:
+            best_score = score
+            best_style = entry.reasoning_style
+    return best_style
+
+
+def _get_provider_reasoning_style(provider_name: str, runtime: RuntimeState) -> str:
+    """Return provider reasoning_style or default 'none'."""
+    provider_cfg = runtime.config.providers.get(provider_name)
+    if provider_cfg and hasattr(provider_cfg, "reasoning_style"):
+        return provider_cfg.reasoning_style  # type: ignore[attr-defined]
+    return "none"
+
+
+def _get_reasoning_style(decision: RoutingDecision, runtime: RuntimeState) -> str:
+    """Return model override reasoning_style, then provider reasoning_style."""
+    return _get_model_reasoning_style(
+        decision.model, decision.provider, runtime
+    ) or _get_provider_reasoning_style(decision.provider, runtime)
+
+
+def _get_reasoning_style_for_candidate(
+    model: str, provider_name: str, runtime: RuntimeState
+) -> str:
+    """Return reasoning_style for arbitrary model/provider candidate."""
+    return _get_model_reasoning_style(
+        model, provider_name, runtime
+    ) or _get_provider_reasoning_style(provider_name, runtime)
+
+
+def _get_model_reasoning_content_support(
+    model: str, provider_name: str, runtime: RuntimeState
+) -> bool | None:
+    """Return model-specific reasoning_content support using prefix/provider matching.
+
+    Provider-matching rules outrank provider-agnostic rules before prefix
+    specificity is considered. For example, a provider-specific wildcard rule
+    beats a longer provider-agnostic prefix rule for the same model.
+    """
+    best_support: bool | None = None
+    best_score: tuple[int, int] = (-1, -1)
+    for entry in runtime.config.model_rules:
+        prefix_matches = entry.prefix == "*" or model.startswith(entry.prefix)
+        if not prefix_matches:
+            continue
+        if entry.provider and entry.provider != provider_name:
+            continue
+        if entry.supports_reasoning_content is None:
+            continue
+        score = (
+            1 if entry.provider else 0,
+            0 if entry.prefix == "*" else len(entry.prefix),
+        )
+        if score > best_score:
+            best_score = score
+            best_support = entry.supports_reasoning_content
+    return best_support
+
+
+def _supports_reasoning_content(
+    model: str, provider_name: str, runtime: RuntimeState
+) -> bool:
+    """Return whether selected upstream explicitly supports messages[].reasoning_content."""
+    model_support = _get_model_reasoning_content_support(model, provider_name, runtime)
+    if model_support is not None:
+        return model_support
+    provider_cfg = runtime.config.providers.get(provider_name)
+    if provider_cfg is None:
+        provider_cfg = runtime.config.providers.get(runtime.config.default_provider)
+    if provider_cfg is None:
+        logger.warning(
+            "Unknown provider for reasoning_content support fallback model=%s provider=%s",
+            model,
+            provider_name,
+        )
+        return False
+    return bool(provider_cfg.supports_reasoning_content)
+
+
+def _sanitize_reasoning_content_for_candidate(
+    body: dict[str, Any], model: str, provider_name: str, runtime: RuntimeState
+) -> dict[str, Any]:
+    """Remove messages[].reasoning_content unless selected upstream declares support."""
+    if _supports_reasoning_content(model, provider_name, runtime):
+        return body
+
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return body
+
+    affected_indexes = [
+        idx
+        for idx, msg in enumerate(messages)
+        if isinstance(msg, dict) and "reasoning_content" in msg
+    ]
+    if not affected_indexes:
+        return body
+
+    sanitized_body = dict(body)
+    sanitized_messages = list(messages)
+    for idx in affected_indexes:
+        sanitized_msg = dict(messages[idx])
+        sanitized_msg.pop("reasoning_content")
+        sanitized_messages[idx] = sanitized_msg
+
+    removed_count = len(affected_indexes)
+    sanitized_body["messages"] = sanitized_messages
+    logger.debug(
+        "REASONING_CONTENT sanitized model=%s provider=%s removed_messages=%d",
+        model,
+        provider_name,
+        removed_count,
+    )
+    return sanitized_body
+
+
+def _has_explicit_reasoning_control(body: dict[str, Any]) -> bool:
+    """Return True if body already contains any supported reasoning control field."""
+    if "reasoning" in body or "reasoning_effort" in body:
+        return True
+    if "thinking" in body:
+        return True
+    if "enable_thinking" in body:
+        return True
+    oc = body.get("output_config")
+    if isinstance(oc, dict) and "effort" in oc:
+        return True
+    gc = body.get("generationConfig")
+    if isinstance(gc, dict):
+        tc = gc.get("thinkingConfig")
+        if isinstance(tc, dict) and "thinkingBudget" in tc:
+            return True
+    return False
+
+
+def _normalize_reasoning_effort(style: str, effort: str) -> str:
+    """Normalize effort labels to values supported by each reasoning_style."""
+    normalized = effort.strip().lower()
+    aliases = {
+        "off": "none",
+        "false": "none",
+        "0": "none",
+        "highx": "xhigh",
+        "extra-high": "xhigh",
+        "extra_high": "xhigh",
+    }
+    normalized = aliases.get(normalized, normalized)
+
+    allowed_by_style = {
+        "openai": {"none", "low", "medium", "high"},
+        "xai": {"none", "low", "medium", "high"},
+        "anthropic": {"low", "medium", "high", "xhigh", "max"},
+        "dashscope": {"none", "low", "medium", "high"},
+        "gemini": {"none", "low", "medium", "high", "xhigh", "max"},
+    }
+    allowed = allowed_by_style.get(style, {"low", "medium", "high"})
+    if normalized in allowed:
+        return normalized
+    if normalized in {"xhigh", "max"}:
+        return "high"
+    return "medium"
+
+
+def _gemini_thinking_budget(effort: str) -> int:
+    """Map normalized effort labels to Gemini thinking budgets."""
+    return {
+        "none": 0,
+        "low": 1024,
+        "medium": 8192,
+        "high": 24576,
+        "xhigh": 32768,
+        "max": 32768,
+    }.get(effort, 8192)
+
+
+def _apply_reasoning_for_style(
+    body: dict[str, Any],
+    style: str,
+    effort: str = "medium",
+) -> dict[str, Any]:
+    """Apply provider-specific reasoning field shape for given style.
+
+    Does not overwrite explicit client-provided reasoning controls.
+    """
+    if style == "none":
+        return body
+    if _has_explicit_reasoning_control(body):
+        return body
+    normalized_effort = _normalize_reasoning_effort(style, effort)
+    if style == "openai":
+        body.setdefault("reasoning", {"effort": normalized_effort})
+    elif style == "xai":
+        body.setdefault("reasoning_effort", normalized_effort)
+    elif style == "anthropic":
+        oc = body.setdefault("output_config", {})
+        if isinstance(oc, dict):
+            oc.setdefault("effort", normalized_effort)
+    elif style == "dashscope":
+        body.setdefault("enable_thinking", normalized_effort != "none")
+    elif style == "gemini":
+        gc = body.setdefault("generationConfig", {})
+        if isinstance(gc, dict):
+            tc = gc.setdefault("thinkingConfig", {})
+            if isinstance(tc, dict):
+                tc.setdefault(
+                    "thinkingBudget", _gemini_thinking_budget(normalized_effort)
+                )
+    return body
 
 
 # ── Compaction helpers ────────────────────────────────────────────────────────
@@ -1274,6 +1556,16 @@ async def chat_completions(request: Request):
                 f"No available model supports required capabilities: {', '.join(sorted(required_capabilities))}",
                 "capability_not_satisfied",
             )
+        except InputLimitNotSatisfiedError as exc:
+            logger.warning(
+                "Input limit not satisfied request_id=%s profile=%s tier=%s prompt_tokens=%d state_version=%d",
+                request_id,
+                exc.profile,
+                exc.tier,
+                exc.prompt_tokens,
+                state.version,
+            )
+            return _openai_error(400, str(exc), "input_limit_not_satisfied")
         except Exception as exc:
             logger.exception(
                 "Router error request_id=%s profile=%s state_version=%d",
@@ -1309,8 +1601,31 @@ async def chat_completions(request: Request):
             body = dict(body)
             body["messages"] = compaction_result.messages
 
+        fallback_body_base = copy.deepcopy(body)
+
         # Replace the model field with the actual model name
         body["model"] = decision.model
+
+        # Inject provider-specific reasoning control if tier has reasoning_effort set
+        # (preserve explicit client controls)
+        if decision.reasoning_effort:
+            style = _get_reasoning_style(decision, state)
+            normalized_effort = _normalize_reasoning_effort(
+                style, decision.reasoning_effort
+            )
+            body = _apply_reasoning_for_style(
+                body, style, effort=decision.reasoning_effort
+            )
+            logger.info(
+                "REASONING_CONTROL injected request_id=%s tier=%s style=%s original_effort=%s normalized_effort=%s provider=%s",
+                request_id,
+                decision.tier,
+                style,
+                decision.reasoning_effort,
+                normalized_effort,
+                decision.provider,
+            )
+
         response = await _try_with_fallbacks(
             body,
             decision,
@@ -1318,6 +1633,7 @@ async def chat_completions(request: Request):
             request_id=request_id,
             compaction_result=compaction_result,
             state=state,
+            fallback_body_base=fallback_body_base,
         )
 
         # Attach compaction headers
@@ -1544,6 +1860,15 @@ async def route_debug(request: Request):
 
     try:
         decision = state.router.route(messages, profile=profile)
+    except InputLimitNotSatisfiedError as exc:
+        logger.warning(
+            "Input limit not satisfied in debug endpoint profile=%s tier=%s prompt_tokens=%d state_version=%d",
+            exc.profile,
+            exc.tier,
+            exc.prompt_tokens,
+            state.version,
+        )
+        return _openai_error(400, str(exc), "input_limit_not_satisfied")
     except Exception as exc:
         logger.exception(
             "Router error in debug endpoint profile=%s state_version=%d",

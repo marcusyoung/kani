@@ -200,7 +200,7 @@ class TestCapabilityFiltering:
 
         # gpt-4o-mini has vision, claude-haiku doesn't
         assert len(capable) == 1
-        assert capable[0][0] == "gpt-4o-mini"
+        assert capable[0].model == "gpt-4o-mini"
 
     def test_filter_capable_candidates_with_tools(self) -> None:
         """Both models should have tools capability."""
@@ -223,7 +223,7 @@ class TestCapabilityFiltering:
 
         # Only gpt-4o-mini has both vision and tools
         assert len(capable) == 1
-        assert capable[0][0] == "gpt-4o-mini"
+        assert capable[0].model == "gpt-4o-mini"
 
     def test_no_filter_when_no_capabilities_required(self) -> None:
         """All candidates should pass when no capabilities are required."""
@@ -249,6 +249,24 @@ class TestCapabilityFiltering:
         caps = router._get_model_capabilities("gpt-4-turbo-20250101")
         assert "vision" in caps
         assert "tools" in caps
+
+    def test_get_model_capabilities_merges_all_matching_rules(self) -> None:
+        """Wildcard/base capabilities should compose with specific rules."""
+        config = self._make_config(
+            model_capabilities=[
+                ModelCapabilityEntry(prefix="*", capabilities=["tools"]),
+                ModelCapabilityEntry(
+                    prefix="gpt-4o",
+                    provider="default",
+                    capabilities=["vision", "json_mode"],
+                ),
+            ]
+        )
+        router = Router(config)
+
+        caps = router._get_model_capabilities("gpt-4o", "default")
+
+        assert caps == {"tools", "vision", "json_mode"}
 
     def test_get_model_capabilities_unknown_model(self) -> None:
         """Unknown models should return empty capability set."""

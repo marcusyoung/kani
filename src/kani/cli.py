@@ -84,11 +84,10 @@ def _profile_tier_count(profile: object) -> int:
 
 def _load_raw_config_keys(config_path: str | None) -> set[str]:
     """Return top-level YAML keys before KaniConfig normalizes legacy aliases."""
-    if config_path is None:
-        return set()
+    from kani.config import _find_config_file
 
-    raw_path = Path(config_path).expanduser()
-    if not raw_path.exists():
+    raw_path = _find_config_file(config_path)
+    if raw_path is None:
         return set()
 
     with raw_path.open() as f:

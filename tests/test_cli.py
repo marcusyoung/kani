@@ -398,6 +398,42 @@ model_capabilities:
         )
         assert "[ERROR] model metadata" not in result.output
 
+    def test_doctor_legacy_model_capabilities_warns_with_env_config(
+        self, runner, empty_dir, monkeypatch
+    ) -> None:
+        config_path = empty_dir / "env-config.yaml"
+        config_path.write_text(
+            """
+default_provider: openrouter
+providers:
+  openrouter:
+    name: openrouter
+    base_url: https://openrouter.ai/api/v1
+profiles:
+  auto:
+    tiers:
+      SIMPLE:
+        primary: gpt-4o-mini
+model_capabilities:
+  - prefix: gpt-4o
+    capabilities:
+      - tools
+"""
+        )
+        monkeypatch.setenv("KANI_CONFIG", str(config_path))
+
+        result = runner.invoke(main, ["doctor"])
+
+        assert result.exit_code == 0
+        assert (
+            "[WARN] model metadata: legacy model_capabilities normalized to 1 model_rules"
+            in result.output
+        )
+        assert (
+            "[OK] model metadata: model_rules entries: 1; legacy model_capabilities entries: 0"
+            not in result.output
+        )
+
     def test_doctor_invalid_config(self, runner, empty_dir) -> None:
         missing_config = empty_dir / "missing.yaml"
 

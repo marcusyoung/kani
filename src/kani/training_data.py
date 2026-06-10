@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
+import time
 from pathlib import Path
 from typing import Any, Protocol, TypedDict
 
@@ -149,23 +151,18 @@ class DistilledFeatureExample(TypedDict):
 class LLMFeatureAnnotator:
     """Offline annotator that labels semantic dimensions with an LLM."""
 
-    @staticmethod
-    def _prompt_template() -> str:
-        return (
-            "You are labeling prompts for routing distillation. "
-            "Return JSON object only with exactly these keys: "
-            f"{', '.join(SEMANTIC_DIMENSIONS)}. "
-            "Each value must be one of: low, medium, high. "
-            "Do not include any explanation or markdown.\n\n"
-            f"{_semantic_dimension_calibration_text()}\n\n"
-            "Prompt:\n{prompt}"
-        )
-
-    @classmethod
-    def _build_prompt(cls, prompt: str) -> str:
-        return cls._prompt_template().format(
-            prompt=prompt[:ANNOTATION_PROMPT_MAX_CHARS]
-        )
+    _SYSTEM_PROMPT = (
+        "You are a prompt classifier for LLM model routing distillation. "
+        "Return ONLY a JSON object with exactly these keys: "
+        f"{', '.join(SEMANTIC_DIMENSIONS)}. "
+        "Each value MUST be one of: low, medium, high. "
+        "No other text. No markdown. No explanation. "
+        "If unsure, use 'medium'.\n\n"
+        "HIGH-IMPACT dimensions (prioritize accuracy): "
+        "reasoningMarkers, agenticTask, multiStepPatterns, "
+        "questionComplexity, constraintCount, technicalTerms.\n\n"
+        f"{_semantic_dimension_calibration_text()}"
+    )
 
     def __init__(
         self,
@@ -208,30 +205,46 @@ class LLMFeatureAnnotator:
                 "KANI_LLM_ANNOTATOR_API_KEY or OPENROUTER_API_KEY is required"
             )
 
-        try:
-            response = httpx.post(
-                f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": self._build_prompt(prompt),
-                        }
-                    ],
-                    "temperature": 0.0,
-                    "max_tokens": 300,
-                },
-                timeout=30.0,
-            )
-            response.raise_for_status()
-            data = response.json()
-        except (httpx.HTTPError, json.JSONDecodeError):
-            return None
+        user_text = prompt[:ANNOTATION_PROMPT_MAX_CHARS]
+
+        max_retries = 5
+        base_delay = 2.0
+        for attempt in range(max_retries):
+            try:
+                response = httpx.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": self._SYSTEM_PROMPT,
+                            },
+                            {
+                                "role": "user",
+                                "content": user_text,
+                            },
+                        ],
+                        "temperature": 0.0,
+                        "max_tokens": 1024,
+                    },
+                    timeout=30.0,
+                )
+                response.raise_for_status()
+                data = response.json()
+                break
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                    time.sleep(delay)
+                    continue
+                return None
+            except (httpx.HTTPError, json.JSONDecodeError):
+                return None
 
         content = (
             data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
@@ -370,7 +383,7 @@ def _save_examples(
     return examples
 
 
-_CHECKPOINT_INTERVAL = 1
+_CHECKPOINT_INTERVAL = 50
 
 
 def extract_distilled_feature_examples(
@@ -378,6 +391,7 @@ def extract_distilled_feature_examples(
     *,
     annotator: FeatureAnnotator | None = None,
     checkpoint_path: Path | None = None,
+    force_annotate: bool = False,
 ) -> list[DistilledFeatureExample]:
     latest_by_prompt: dict[str, DistilledFeatureExample] = {}
 
@@ -404,7 +418,7 @@ def extract_distilled_feature_examples(
             print(f"  [{idx}/{total}] skip: empty prompt")
             continue
 
-        labels = _extract_semantic_labels_from_record(record)
+        labels = None if force_annotate else _extract_semantic_labels_from_record(record)
         source = "log"
         if labels is None and annotator is not None:
             if prompt in latest_by_prompt:
@@ -450,11 +464,13 @@ def build_feature_dataset(
     output_path: Path,
     *,
     annotator: FeatureAnnotator | None = None,
+    force_annotate: bool = False,
 ) -> list[DistilledFeatureExample]:
     examples = extract_distilled_feature_examples(
         load_routing_records(log_paths),
         annotator=annotator,
         checkpoint_path=output_path if annotator else None,
+        force_annotate=force_annotate,
     )
     _save_examples(
         {e["prompt"]: e for e in examples},
@@ -500,6 +516,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Use LLM annotation for records missing semantic labels",
     )
+    parser.add_argument(
+        "--force-annotate",
+        action="store_true",
+        help="Ignore pre-existing semanticLabels from routing logs and re-annotate all records with the LLM",
+    )
     parser.add_argument("--model", help="LLM model for annotation")
     parser.add_argument("--base-url", help="LLM base URL for annotation")
     parser.add_argument("--api-key", help="LLM API key for annotation")
@@ -514,7 +535,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("No routing log files found")
 
     annotator = None
-    if args.annotate_missing:
+    if args.annotate_missing or args.force_annotate:
         annotator = LLMFeatureAnnotator(
             model=args.model,
             base_url=args.base_url,
@@ -522,7 +543,12 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     output_path = Path(args.output).expanduser()
-    examples = build_feature_dataset(log_paths, output_path, annotator=annotator)
+    examples = build_feature_dataset(
+        log_paths,
+        output_path,
+        annotator=annotator,
+        force_annotate=args.force_annotate,
+    )
 
     print(f"Loaded {len(log_paths)} log files")
     print(f"Wrote {len(examples)} distilled feature examples to {output_path}")

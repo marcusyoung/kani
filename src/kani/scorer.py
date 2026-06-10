@@ -91,8 +91,8 @@ _DEFAULT_WEIGHTS: dict[str, float] = {
 
 _DEFAULT_THRESHOLDS: dict[str, float] = {
     "SIMPLE": 0.2,
-    "MEDIUM": 0.45,
-    "COMPLEX": 0.7,
+    "MEDIUM": 0.55,
+    "COMPLEX": 0.75,
 }
 
 _CODE_MARKERS = (

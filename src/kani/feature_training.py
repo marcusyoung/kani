@@ -45,7 +45,7 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "domainSpecificity": 1.1,
     "agenticTask": 1.4,
 }
-DEFAULT_THRESHOLDS: dict[str, float] = {"SIMPLE": 0.2, "MEDIUM": 0.45, "COMPLEX": 0.7}
+DEFAULT_THRESHOLDS: dict[str, float] = {"SIMPLE": 0.2, "MEDIUM": 0.55, "COMPLEX": 0.75}
 
 
 def get_embeddings(

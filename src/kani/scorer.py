@@ -140,9 +140,9 @@ def _token_count(text: str) -> int:
 
 
 def _tier_from_score(score: float, thresholds: dict[str, float]) -> Tier:
-    simple_max = float(thresholds.get("SIMPLE", 0.2))
-    medium_max = float(thresholds.get("MEDIUM", 0.45))
-    complex_max = float(thresholds.get("COMPLEX", 0.7))
+    simple_max = float(thresholds.get("SIMPLE", _DEFAULT_THRESHOLDS["SIMPLE"]))
+    medium_max = float(thresholds.get("MEDIUM", _DEFAULT_THRESHOLDS["MEDIUM"]))
+    complex_max = float(thresholds.get("COMPLEX", _DEFAULT_THRESHOLDS["COMPLEX"]))
 
     if score <= simple_max:
         return Tier.SIMPLE
@@ -192,7 +192,10 @@ def _tier_from_axes(
     )
 
     axis_tier = Tier.SIMPLE
-    if reasoning_score >= 0.75 or semantic_labels.get("reasoningMarkers") == "high":
+    if semantic_labels.get("agenticTask") == "high" and (
+        reasoning_score >= 0.75
+        or semantic_labels.get("reasoningMarkers") == "high"
+    ):
         axis_tier = Tier.REASONING
     elif (
         semantic_labels.get("agenticTask") == "high"

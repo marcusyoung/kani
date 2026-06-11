@@ -59,6 +59,7 @@ class Tier(str, Enum):
 class ScoringConfig(BaseModel):
     """Configuration for the distilled feature scoring pipeline."""
 
+    disable_axis_overrides: bool = False
     fallback_tier: Tier = Tier.MEDIUM
     fallback_confidence: float = 0.35
 
@@ -168,8 +169,13 @@ def _tier_from_axes(
     score: float,
     semantic_labels: dict[str, str],
     thresholds: dict[str, float],
+    *,
+    disable_overrides: bool = False,
 ) -> Tier:
     base_tier = _tier_from_score(score, thresholds)
+    if disable_overrides:
+        return base_tier
+
     complexity_score = _semantic_axis_score(
         semantic_labels,
         [
@@ -729,7 +735,12 @@ class Scorer:
             semantic_labels,
             classifier.weights,
         )
-        tier = _tier_from_axes(score, semantic_labels, classifier.tier_thresholds)
+        tier = _tier_from_axes(
+            score,
+            semantic_labels,
+            classifier.tier_thresholds,
+            disable_overrides=self.config.disable_axis_overrides,
+        )
 
         signals: dict[str, Any] = {
             "method": {"raw": "distilled-features", "matches": 0},

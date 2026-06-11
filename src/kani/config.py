@@ -350,6 +350,7 @@ class KaniConfig(BaseModel):
     smart_proxy: SmartProxyConfig = Field(default_factory=SmartProxyConfig)
     model_rules: list[ModelRuleEntry] = Field(default_factory=list)
     model_capabilities: list[ModelRuleEntry] = Field(default_factory=list)
+    disable_axis_overrides: bool = False
 
     @model_validator(mode="after")
     def _normalize_legacy_model_capabilities(self) -> "KaniConfig":

@@ -763,9 +763,14 @@ class Router:
         del messages
 
         try:
-            from kani.scorer import Scorer
+            from kani.scorer import Scorer, ScoringConfig
 
-            scorer = Scorer(enable_routing_log=False)
+            scorer = Scorer(
+                ScoringConfig(
+                    disable_axis_overrides=self.config.disable_axis_overrides,
+                ),
+                enable_routing_log=False,
+            )
             result = scorer.classify(classification_input.text)
             tier_val = result.tier
             if hasattr(tier_val, "value"):

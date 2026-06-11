@@ -330,10 +330,22 @@ def _tier_from_axes(
     semantic_labels: dict[str, str],
     thresholds: dict[str, float],
     *,
-    disable_overrides: bool = False,
+    disable_axis_overrides: bool = False,
 ) -> Tier:
+    """Compute final tier from base score and semantic dimension labels.
+
+    Args:
+        score: Weighted composite score from all dimensions.
+        semantic_labels: Dict of dimension name -> ``'low'`` | ``'medium'`` | ``'high'``.
+        thresholds: Dict of tier name -> score threshold.
+        disable_axis_overrides: If True, skip axis-based promotions (agenticTask,
+            reasoningMarkers, complexity_score) and return ``base_tier`` directly.
+
+    Returns:
+        Final tier.
+    """
     base_tier = _tier_from_score(score, thresholds)
-    if disable_overrides:
+    if disable_axis_overrides:
         return base_tier
 
     complexity_score = _semantic_axis_score(
@@ -567,7 +579,7 @@ class Scorer:
         )
         tier = _tier_from_axes(
             score, semantic_labels, thresholds,
-            disable_overrides=self.config.disable_axis_overrides,
+            disable_axis_overrides=self.config.disable_axis_overrides,
         )
 
         signals: dict[str, Any] = {

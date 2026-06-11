@@ -6,10 +6,15 @@ Distilled feature-based prompt classifier used by the router.
 from __future__ import annotations
 
 import logging
+import os
+import pickle
+import time
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
+import numpy as np
 from pydantic import BaseModel
 
 log = logging.getLogger(__name__)
@@ -94,6 +99,52 @@ _DEFAULT_THRESHOLDS: dict[str, float] = {
     "MEDIUM": 0.55,
     "COMPLEX": 0.75,
 }
+
+
+def _build_embedding_client(
+    model_name: str = "text-embedding-3-small",
+) -> tuple[Any, str]:
+    """Create an embedding client from config or environment variables."""
+    from openai import OpenAI
+
+    from kani.config import load_config
+
+    try:
+        loaded = load_config()
+        cfg = loaded.embedding
+    except Exception:
+        loaded = None
+        cfg = None
+
+    if loaded and cfg and cfg.enabled:
+        resolved = loaded.embedding_resolved()
+        if resolved is not None:
+            base_url, api_key = resolved
+            return (
+                OpenAI(api_key=api_key or "dummy", base_url=base_url),
+                cfg.model or model_name,
+            )
+
+    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get(
+        "OPENROUTER_API_KEY"
+    )
+    base_url = None
+    resolved_model = model_name
+
+    if not os.environ.get("OPENAI_API_KEY") and os.environ.get(
+        "OPENROUTER_API_KEY"
+    ):
+        base_url = "https://openrouter.ai/api/v1"
+        if not resolved_model.startswith("openai/"):
+            resolved_model = f"openai/{resolved_model}"
+
+    if not api_key:
+        raise RuntimeError(
+            "No embedding config or OPENAI_API_KEY / OPENROUTER_API_KEY"
+        )
+
+    return OpenAI(api_key=api_key, base_url=base_url), resolved_model
+
 
 _CODE_MARKERS = (
     "```",
@@ -249,9 +300,9 @@ def _token_count(text: str) -> int:
 
 
 def _tier_from_score(score: float, thresholds: dict[str, float]) -> Tier:
-    simple_max = float(thresholds.get("SIMPLE", 0.2))
-    medium_max = float(thresholds.get("MEDIUM", 0.45))
-    complex_max = float(thresholds.get("COMPLEX", 0.7))
+    simple_max = float(thresholds.get("SIMPLE", _DEFAULT_THRESHOLDS["SIMPLE"]))
+    medium_max = float(thresholds.get("MEDIUM", _DEFAULT_THRESHOLDS["MEDIUM"]))
+    complex_max = float(thresholds.get("COMPLEX", _DEFAULT_THRESHOLDS["COMPLEX"]))
 
     if score <= simple_max:
         return Tier.SIMPLE
@@ -301,7 +352,10 @@ def _tier_from_axes(
     )
 
     axis_tier = Tier.SIMPLE
-    if reasoning_score >= 0.75 or semantic_labels.get("reasoningMarkers") == "high":
+    if semantic_labels.get("agenticTask") == "high" and (
+        reasoning_score >= 0.75
+        or semantic_labels.get("reasoningMarkers") == "high"
+    ):
         axis_tier = Tier.REASONING
     elif (
         semantic_labels.get("agenticTask") == "high"
@@ -316,6 +370,94 @@ def _tier_from_axes(
     return max(base_tier, axis_tier, key=lambda tier: list(Tier).index(tier))
 
 
+class DistilledFeatureClassifier:
+    """Embedding-based multi-output semantic feature classifier loaded from pkl."""
+
+    _instance: DistilledFeatureClassifier | None = None
+    _model_dir: Path | None = None
+
+    def __init__(self, model_path: Path) -> None:
+        with open(model_path, "rb") as f:
+            data = pickle.load(f)
+
+        self.classifier = data["classifier"]
+        self.embedding_model: str = data.get(
+            "embedding_model", "text-embedding-3-small"
+        )
+        self.semantic_dimensions: list[str] = list(
+            data.get("semantic_dimensions", SEMANTIC_DIMENSIONS)
+        )
+        self.label_encoders: dict[str, Any] = data["label_encoders"]
+        self.weights: dict[str, float] = dict(data.get("weights", {}))
+        self.tier_thresholds: dict[str, float] = dict(
+            data.get(
+                "tier_thresholds",
+                _DEFAULT_THRESHOLDS,
+            )
+        )
+        self._client: Any | None = None
+
+    @classmethod
+    def load(
+        cls, model_dir: Path | None = None
+    ) -> DistilledFeatureClassifier | None:
+        if model_dir is None:
+            model_dir = (
+                Path(__file__).resolve().parent.parent.parent / "models"
+            )
+        if cls._instance is not None and cls._model_dir == model_dir:
+            return cls._instance
+        pkl = model_dir / "feature_classifier.pkl"
+        if not pkl.exists():
+            return None
+        try:
+            cls._instance = cls(pkl)
+            cls._model_dir = model_dir
+            log.info("Loaded distilled feature classifier from %s", pkl)
+            return cls._instance
+        except Exception:
+            log.exception("Failed to load distilled feature classifier")
+            return None
+
+    def _get_client(self) -> Any:
+        if self._client is not None:
+            return self._client
+        self._client, self.embedding_model = _build_embedding_client(
+            self.embedding_model
+        )
+        return self._client
+
+    def _embed(self, text: str) -> np.ndarray:
+        client = self._get_client()
+        resp = client.embeddings.create(
+            input=[text[:4000]], model=self.embedding_model
+        )
+        return np.array([resp.data[0].embedding], dtype=np.float32)
+
+    def predict(self, text: str) -> tuple[dict[str, str], float]:
+        embedding = self._embed(text)
+        predicted = self.classifier.predict(embedding)[0]
+        probs = self.classifier.predict_proba(embedding)
+
+        labels: dict[str, str] = {}
+        confidence_sum = 0.0
+        for idx, dim in enumerate(self.semantic_dimensions):
+            if dim in self.label_encoders:
+                encoder = self.label_encoders[dim]
+                label = encoder.inverse_transform([predicted[idx]])[0]
+                labels[dim] = str(label)
+                dim_probs = dict(
+                    zip(
+                        [str(c) for c in encoder.classes_],
+                        [float(p) for p in probs[idx][0]],
+                    )
+                )
+                confidence_sum += max(dim_probs.values(), default=0.0)
+
+        confidence = confidence_sum / max(len(self.semantic_dimensions), 1)
+        return labels, confidence
+
+
 class Scorer:
     """Distilled feature-based prompt classifier."""
 
@@ -328,6 +470,8 @@ class Scorer:
     ) -> None:
         self.config = config or ScoringConfig()
         self._enable_routing_log = enable_routing_log
+        self._feature_clf = DistilledFeatureClassifier.load(feature_model_dir)
+        self._pkl_cooldown_until: float = 0.0
 
     @staticmethod
     def _build_dimensions(
@@ -375,16 +519,50 @@ class Scorer:
 
     def _classify_with_features(self, text: str) -> ClassificationResult:
         token_count = _token_count(text)
-        semantic_labels, confidence = _heuristic_semantic_labels(text)
+
+        _PKL_RETRY_SECONDS: float = 60.0
+
+        if self._feature_clf is not None and time.time() >= self._pkl_cooldown_until:
+            try:
+                semantic_labels, confidence = self._feature_clf.predict(text)
+                weights = self._feature_clf.weights or _DEFAULT_WEIGHTS
+                thresholds = self._feature_clf.tier_thresholds
+                method_signals = {
+                    "raw": "distilled-features",
+                    "matches": 0,
+                }
+            except Exception:
+                log.warning(
+                    "Feature classifier predict failed, "
+                    "using heuristics for %ds",
+                    int(_PKL_RETRY_SECONDS),
+                )
+                self._pkl_cooldown_until = time.time() + _PKL_RETRY_SECONDS
+                semantic_labels, confidence = _heuristic_semantic_labels(text)
+                weights = _DEFAULT_WEIGHTS
+                thresholds = _DEFAULT_THRESHOLDS
+                method_signals = {
+                    "raw": "heuristic-features",
+                    "matches": 0,
+                }
+        else:
+            semantic_labels, confidence = _heuristic_semantic_labels(text)
+            weights = _DEFAULT_WEIGHTS
+            thresholds = _DEFAULT_THRESHOLDS
+            method_signals = {
+                "raw": "heuristic-features",
+                "matches": 0,
+            }
+
         dimensions, score, agentic_score = self._build_dimensions(
             token_count,
             semantic_labels,
-            _DEFAULT_WEIGHTS,
+            weights,
         )
-        tier = _tier_from_axes(score, semantic_labels, _DEFAULT_THRESHOLDS)
+        tier = _tier_from_axes(score, semantic_labels, thresholds)
 
         signals: dict[str, Any] = {
-            "method": {"raw": "heuristic-features", "matches": 0},
+            "method": method_signals,
             "tokenCount": token_count,
             "semanticLabels": semantic_labels,
             "featureVersion": "v1",

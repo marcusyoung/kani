@@ -312,8 +312,30 @@ def _detect_required_capabilities(body: dict[str, Any]) -> set[str]:
                             break
 
     # Check for tools/functions capability
+    # Only require tools if the conversation has active tool usage
+    # (tool_calls or role=tool messages) since the last user message.
     if "tools" in body or "functions" in body:
-        required.add("tools")
+        # Find the last user message
+        last_user_idx = -1
+        for idx in range(len(messages) - 1, -1, -1):
+            msg = messages[idx]
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                last_user_idx = idx
+                break
+        # Check for tool activity after the last user message
+        found_tool_activity = False
+        for idx in range(last_user_idx + 1, len(messages)):
+            msg = messages[idx]
+            if isinstance(msg, dict):
+                if msg.get("role") == "tool" or "tool_calls" in msg:
+                    found_tool_activity = True
+                    break
+        if found_tool_activity:
+            required.add("tools")
+        else:
+            # No tool activity post-user — tools are decorative.
+            # But also flag for logging so we can see when this happens.
+            pass
 
     # Check for json_mode capability
     response_format = body.get("response_format")

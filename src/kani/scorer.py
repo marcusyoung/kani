@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 
 RUNTIME_FEATURE_CLASSIFIER_SUPPORTED = True
 FEATURE_CLASSIFIER_FILENAME = "feature_classifier.pkl"
-FEATURE_EMBEDDING_TIMEOUT_SECONDS = 2.0
+FEATURE_EMBEDDING_TIMEOUT_SECONDS = 10.0
 
 FEATURE_DIMENSIONS: tuple[str, ...] = (
     "tokenCount",
@@ -113,8 +113,8 @@ _DEFAULT_WEIGHTS: dict[str, float] = {
 
 _DEFAULT_THRESHOLDS: dict[str, float] = {
     "SIMPLE": 0.2,
-    "MEDIUM": 0.55,
-    "COMPLEX": 0.75,
+    "MEDIUM": 0.58,
+    "COMPLEX": 0.72,
 }
 
 def _token_count(text: str) -> int:

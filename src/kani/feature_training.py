@@ -24,7 +24,7 @@ from kani.scorer import SEMANTIC_DIMENSIONS, LocalEmbeddingBackend
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_MODEL_OPENROUTER = "openai/text-embedding-3-small"
-EMBEDDING_DIM = 1536
+EMBEDDING_DIM = 1024
 BATCH_SIZE = 100
 EMBEDDING_TEXT_LIMIT = 4000
 VALID_DIMENSION_LABELS = {"low", "medium", "high"}
@@ -45,7 +45,7 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "domainSpecificity": 1.1,
     "agenticTask": 1.4,
 }
-DEFAULT_THRESHOLDS: dict[str, float] = {"SIMPLE": 0.2, "MEDIUM": 0.55, "COMPLEX": 0.75}
+DEFAULT_THRESHOLDS: dict[str, float] = {"SIMPLE": 0.2, "MEDIUM": 0.58, "COMPLEX": 0.72}
 
 
 def get_embeddings(

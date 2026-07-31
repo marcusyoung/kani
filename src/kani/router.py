@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from threading import Lock
 from typing import Any
@@ -90,6 +91,11 @@ _DEFAULT_TIER = "MEDIUM"
 _TIER_ORDER = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]
 
 
+def _session_hash(session_key: str) -> int:
+    """Deterministic hash for session-sticky candidate selection."""
+    return int.from_bytes(hashlib.sha256(session_key.encode()).digest()[:8], "big")
+
+
 class Router:
     """Given chat messages, decides which model and provider to use."""
 
@@ -117,6 +123,7 @@ class Router:
         profile: str | None = None,
         model: str | None = None,
         required_capabilities: set[str] | None = None,
+        session_key: str | None = None,
     ) -> RoutingDecision:
         """Route a chat request to the right model+provider.
 
@@ -126,6 +133,7 @@ class Router:
             model: If set, may contain 'kani/<profile>' to select a profile,
                    or an explicit model ID to pass through.
             required_capabilities: Set of required capabilities (e.g., {'vision', 'tools', 'json_mode'}).
+            session_key: Optional session key for session-sticky primary selection.
 
         Returns:
             A RoutingDecision with all the info needed to proxy the request.
@@ -327,6 +335,7 @@ class Router:
             resolved_tier,
             tier_cfg,
             filter_to_candidates=selection_candidates,
+            session_key=session_key,
         )
         model_id = primary_candidate.model
 
@@ -713,8 +722,9 @@ class Router:
         tier: str,
         tier_cfg: Any,
         filter_to_candidates: list[ResolvedModelCandidate] | None = None,
+        session_key: str | None = None,
     ) -> ResolvedModelCandidate:
-        """Select a primary candidate via per profile+tier round-robin.
+        """Select a primary candidate via per profile+tier round-robin or session-sticky hash.
 
         Args:
             profile: Profile name.
@@ -722,6 +732,7 @@ class Router:
             tier_cfg: Tier config.
             filter_to_candidates: If provided, select only from this list.
                                  Otherwise use all primary candidates.
+            session_key: Optional session key for session-sticky selection.
 
         Returns:
             Selected normalized model candidate.
@@ -734,6 +745,23 @@ class Router:
         if len(candidates) == 1:
             return candidates[0]
 
+        # Session-sticky: deterministic selection by session key hash
+        if session_key is not None and tier_cfg.primary_selection == "session_sticky":
+            selected_idx = _session_hash(session_key) % len(candidates)
+            selected = candidates[selected_idx]
+            log.debug(
+                "Primary session-sticky selected profile=%s tier=%s index=%d/%d model=%s provider=%s session_key=%s",
+                profile,
+                tier,
+                selected_idx,
+                len(candidates),
+                selected.model,
+                selected.provider or "",
+                session_key[:8] + "...",
+            )
+            return selected
+
+        # Round-robin (default / fallback when no session key)
         state_key = (profile, tier)
         with self._rr_lock:
             next_idx = self._rr_state.get(state_key, 0)

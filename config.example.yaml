@@ -17,6 +17,20 @@ default_provider: openrouter   # override to your preferred provider
 default_profile: auto
 
 # ---------------------------------------------------------------------------
+# Routing Configuration
+# ---------------------------------------------------------------------------
+# Session-sticky routing preserves prefix cache locality by pinning a
+# conversation to the same primary provider. When a tier's primary_selection
+# is "session_sticky", kani reads the session key from this HTTP header
+# and uses hash(session_key) % len(candidates) for deterministic selection.
+# When the header is absent, falls back to round-robin (no regression).
+#
+# This is separate from smart_proxy.context_compaction.session.header_name.
+
+routing:
+    session_header: X-Session-Id
+
+# ---------------------------------------------------------------------------
 # LLM Classifier (optional — escalation when rule confidence < 0.7)
 # ---------------------------------------------------------------------------
 # Uncomment and configure to enable LLM-based tier classification.
@@ -145,6 +159,10 @@ providers:
 # ---------------------------------------------------------------------------
 # Each profile has four tiers: SIMPLE / MEDIUM / COMPLEX / REASONING.
 # primary: model to use first (string/object) or ordered list for round-robin
+# primary_selection: round_robin (default) or session_sticky
+#   When session_sticky, the same session key always selects the same
+#   primary candidate, preserving prefix cache locality across requests
+#   in the same conversation. Requires routing.session_header to be set.
 # fallback: list of models tried on upstream error (5xx / timeout)
 #   - fallback: null is allowed and treated as []
 # provider: optional override; resolution order is model-entry provider,

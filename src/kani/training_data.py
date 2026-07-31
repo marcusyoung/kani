@@ -439,7 +439,9 @@ def extract_distilled_feature_examples(
             print(f"  [{idx}/{total}] skip: empty prompt")
             continue
 
-        labels = None if force_annotate else _extract_semantic_labels_from_record(record)
+        labels = (
+            None if force_annotate else _extract_semantic_labels_from_record(record)
+        )
         source = "log"
         if labels is None and annotator is not None:
             if prompt in latest_by_prompt:

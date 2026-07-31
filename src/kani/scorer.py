@@ -211,8 +211,7 @@ def _tier_from_axes(
 
     axis_tier = Tier.SIMPLE
     if semantic_labels.get("agenticTask") == "high" and (
-        reasoning_score >= 0.75
-        or semantic_labels.get("reasoningMarkers") == "high"
+        reasoning_score >= 0.75 or semantic_labels.get("reasoningMarkers") == "high"
     ):
         axis_tier = Tier.REASONING
     elif (

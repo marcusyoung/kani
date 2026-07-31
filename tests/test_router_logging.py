@@ -371,3 +371,210 @@ class TestRouterLogging:
 
         assert decision.model == "model-c"
         assert decision.fallbacks == []
+
+
+class TestSessionStickyRouting:
+    """Tests for session-sticky primary selection."""
+
+    def test_session_sticky_deterministic_selection(self) -> None:
+        """Same session key always selects the same candidate."""
+        config = KaniConfig(
+            providers={
+                "openrouter": ProviderConfig(
+                    name="openrouter",
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key="test-key",
+                )
+            },
+            default_provider="openrouter",
+            profiles={
+                "auto": ProfileConfig(
+                    tiers={
+                        "SIMPLE": TierModelConfig(
+                            primary=["model-a", "model-b", "model-c"],
+                            primary_selection="session_sticky",
+                        ),
+                    }
+                )
+            },
+            default_profile="auto",
+        )
+        router = Router(config)
+
+        with patch.object(
+            Router,
+            "_classify",
+            return_value={
+                "tier": "SIMPLE",
+                "score": 0.1,
+                "confidence": 0.9,
+                "signals": ["method"],
+                "signal_details": {"method": {"raw": "distilled-features"}},
+                "agentic_score": 0.0,
+            },
+        ):
+            r1 = router.route(
+                [{"role": "user", "content": "hi"}],
+                profile="auto",
+                session_key="session-abc",
+            )
+            r2 = router.route(
+                [{"role": "user", "content": "hi"}],
+                profile="auto",
+                session_key="session-abc",
+            )
+            r3 = router.route(
+                [{"role": "user", "content": "hi"}],
+                profile="auto",
+                session_key="session-abc",
+            )
+
+        assert r1.model == r2.model == r3.model
+
+    def test_session_sticky_different_keys_may_differ(self) -> None:
+        """Different session keys can select different candidates."""
+        config = KaniConfig(
+            providers={
+                "openrouter": ProviderConfig(
+                    name="openrouter",
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key="test-key",
+                )
+            },
+            default_provider="openrouter",
+            profiles={
+                "auto": ProfileConfig(
+                    tiers={
+                        "SIMPLE": TierModelConfig(
+                            primary=["model-a", "model-b", "model-c"],
+                            primary_selection="session_sticky",
+                        ),
+                    }
+                )
+            },
+            default_profile="auto",
+        )
+        router = Router(config)
+
+        with patch.object(
+            Router,
+            "_classify",
+            return_value={
+                "tier": "SIMPLE",
+                "score": 0.1,
+                "confidence": 0.9,
+                "signals": ["method"],
+                "signal_details": {"method": {"raw": "distilled-features"}},
+                "agentic_score": 0.0,
+            },
+        ):
+            selections = set()
+            for i in range(20):
+                r = router.route(
+                    [{"role": "user", "content": "hi"}],
+                    profile="auto",
+                    session_key=f"session-{i:04d}",
+                )
+                selections.add(r.model)
+
+        # With 3 candidates and 20 keys, we should see at least 2 distinct selections
+        assert len(selections) >= 2
+
+    def test_round_robin_when_no_session_key(self) -> None:
+        """With primary_selection=session_sticky but no session_key, round-robin is used."""
+        config = KaniConfig(
+            providers={
+                "openrouter": ProviderConfig(
+                    name="openrouter",
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key="test-key",
+                )
+            },
+            default_provider="openrouter",
+            profiles={
+                "auto": ProfileConfig(
+                    tiers={
+                        "SIMPLE": TierModelConfig(
+                            primary=["model-a", "model-b"],
+                            primary_selection="session_sticky",
+                        ),
+                    }
+                )
+            },
+            default_profile="auto",
+        )
+        router = Router(config)
+
+        with patch.object(
+            Router,
+            "_classify",
+            return_value={
+                "tier": "SIMPLE",
+                "score": 0.1,
+                "confidence": 0.9,
+                "signals": ["method"],
+                "signal_details": {"method": {"raw": "distilled-features"}},
+                "agentic_score": 0.0,
+            },
+        ):
+            r1 = router.route([{"role": "user", "content": "hi"}], profile="auto")
+            r2 = router.route([{"role": "user", "content": "hi"}], profile="auto")
+            r3 = router.route([{"role": "user", "content": "hi"}], profile="auto")
+
+        # Round-robin alternates: a, b, a
+        assert [r1.model, r2.model, r3.model] == ["model-a", "model-b", "model-a"]
+
+    def test_round_robin_default_ignores_session_key(self) -> None:
+        """With default primary_selection=round_robin, session_key has no effect."""
+        config = KaniConfig(
+            providers={
+                "openrouter": ProviderConfig(
+                    name="openrouter",
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key="test-key",
+                )
+            },
+            default_provider="openrouter",
+            profiles={
+                "auto": ProfileConfig(
+                    tiers={
+                        "SIMPLE": TierModelConfig(
+                            primary=["model-a", "model-b"],
+                        ),
+                    }
+                )
+            },
+            default_profile="auto",
+        )
+        router = Router(config)
+
+        with patch.object(
+            Router,
+            "_classify",
+            return_value={
+                "tier": "SIMPLE",
+                "score": 0.1,
+                "confidence": 0.9,
+                "signals": ["method"],
+                "signal_details": {"method": {"raw": "distilled-features"}},
+                "agentic_score": 0.0,
+            },
+        ):
+            r1 = router.route(
+                [{"role": "user", "content": "hi"}],
+                profile="auto",
+                session_key="session-abc",
+            )
+            r2 = router.route(
+                [{"role": "user", "content": "hi"}],
+                profile="auto",
+                session_key="session-abc",
+            )
+            r3 = router.route(
+                [{"role": "user", "content": "hi"}],
+                profile="auto",
+                session_key="session-abc",
+            )
+
+        # Round-robin still alternates despite session_key
+        assert [r1.model, r2.model, r3.model] == ["model-a", "model-b", "model-a"]

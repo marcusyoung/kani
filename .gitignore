@@ -21,3 +21,6 @@ models/
 # review-gauntlet output
 .review-gauntlet/
 !.review-gauntlet/checkpoints/
+
+# MetaMCP runtime artifacts
+.metamcp/

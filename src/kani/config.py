@@ -114,6 +114,7 @@ class TierModelConfig(BaseModel):
     reasoning_effort: str | None = (
         None  # low | medium | high | none (tier-level override)
     )
+    primary_selection: Literal["round_robin", "session_sticky"] = "round_robin"
 
     @model_validator(mode="after")
     def _validate_primary_not_empty(self) -> "TierModelConfig":
@@ -280,6 +281,12 @@ class FallbackBackoffConfig(BaseModel):
         return self
 
 
+class RoutingConfig(BaseModel):
+    """Configuration for routing-level settings."""
+
+    session_header: str = "X-Session-Id"
+
+
 class SmartProxyConfig(BaseModel):
     """Smart-proxy feature configuration."""
 
@@ -344,6 +351,7 @@ class KaniConfig(BaseModel):
     default_provider: str = "openrouter"
     profiles: dict[str, ProfileConfig] = Field(default_factory=dict)
     default_profile: str = "auto"
+    routing: RoutingConfig = Field(default_factory=RoutingConfig)
     llm_classifier: LLMClassifierConfig | None = None
     feature_annotator: FeatureAnnotatorConfig | None = None
     embedding: EmbeddingConfig | None = None

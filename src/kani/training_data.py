@@ -239,7 +239,7 @@ class LLMFeatureAnnotator:
                 break
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429 and attempt < max_retries - 1:
-                    delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                    delay = base_delay * (2**attempt) + random.uniform(0, 1)
                     time.sleep(delay)
                     continue
                 return None
@@ -418,7 +418,9 @@ def extract_distilled_feature_examples(
             print(f"  [{idx}/{total}] skip: empty prompt")
             continue
 
-        labels = None if force_annotate else _extract_semantic_labels_from_record(record)
+        labels = (
+            None if force_annotate else _extract_semantic_labels_from_record(record)
+        )
         source = "log"
         if labels is None and annotator is not None:
             if prompt in latest_by_prompt:

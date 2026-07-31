@@ -117,6 +117,7 @@ _DEFAULT_THRESHOLDS: dict[str, float] = {
     "COMPLEX": 0.72,
 }
 
+
 def _token_count(text: str) -> int:
     return max(1, len(text.split()))
 
@@ -192,8 +193,7 @@ def _tier_from_axes(
 
     axis_tier = Tier.SIMPLE
     if semantic_labels.get("agenticTask") == "high" and (
-        reasoning_score >= 0.75
-        or semantic_labels.get("reasoningMarkers") == "high"
+        reasoning_score >= 0.75 or semantic_labels.get("reasoningMarkers") == "high"
     ):
         axis_tier = Tier.REASONING
     elif (
@@ -560,7 +560,9 @@ class Scorer:
             classifier.weights,
         )
         tier = _tier_from_axes(
-            score, semantic_labels, classifier.tier_thresholds,
+            score,
+            semantic_labels,
+            classifier.tier_thresholds,
             disable_axis_overrides=self.config.disable_axis_overrides,
         )
 

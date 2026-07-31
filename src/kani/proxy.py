@@ -487,7 +487,7 @@ def _log_usage(
     )
 
 
-_KEEP_REASONING_PREFIXES = ("deepseek-v4-", "kimi-k2")
+_KEEP_REASONING_PREFIXES = ("deepseek-v4-", "kimi-k2", "syn:large:vision")
 
 
 def _sanitize_reasoning_content(
@@ -1559,11 +1559,15 @@ async def chat_completions(request: Request):
         # Detect required capabilities from request body
         required_capabilities = _detect_required_capabilities(body)
 
+        # Extract session key for session-sticky primary selection
+        session_key = request.headers.get(state.config.routing.session_header)
+
         try:
             decision: RoutingDecision = state.router.route(
                 messages,
                 profile=profile_name,
                 required_capabilities=required_capabilities,
+                session_key=session_key,
             )
         except CapabilityNotSatisfiedError:
             logger.warning(

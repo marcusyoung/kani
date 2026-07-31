@@ -253,8 +253,10 @@ class LLMFeatureAnnotator:
                 break
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429 and attempt < max_retries - 1:
-                    delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
-                    print(f"  [RATE LIMIT] Retrying in {delay:.1f}s... (attempt {attempt + 1}/{max_retries})")
+                    delay = base_delay * (2**attempt) + random.uniform(0, 1)
+                    print(
+                        f"  [RATE LIMIT] Retrying in {delay:.1f}s... (attempt {attempt + 1}/{max_retries})"
+                    )
                     time.sleep(delay)
                     continue
                 print(f"  [DEBUG] API/JSON error for prompt '{prompt[:80]}...': {e}")
@@ -262,6 +264,9 @@ class LLMFeatureAnnotator:
             except (httpx.HTTPError, json.JSONDecodeError) as e:
                 print(f"  [DEBUG] API/JSON error for prompt '{prompt[:80]}...': {e}")
                 return None
+
+        else:
+            return None
 
         content = (
             data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
@@ -279,7 +284,9 @@ class LLMFeatureAnnotator:
             print(f"  [DEBUG] Raw content: {stripped[:200]}...")
             return None
         if not isinstance(parsed, dict):
-            print(f"  [DEBUG] Non-dict response for prompt '{prompt[:80]}...': {parsed}")
+            print(
+                f"  [DEBUG] Non-dict response for prompt '{prompt[:80]}...': {parsed}"
+            )
             return None
 
         expected_keys = set(SEMANTIC_DIMENSIONS)

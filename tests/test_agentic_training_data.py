@@ -68,45 +68,29 @@ def test_semantic_dimension_calibration_text_includes_representative_guidance() 
         assert f"- {label}:" in text
 
 
-def test_llm_feature_annotator_calibration_is_lazy(monkeypatch) -> None:
-    calls = 0
-
-    def _calibration_text() -> str:
-        nonlocal calls
-        calls += 1
-        raise ValueError("calibration drift")
-
-    monkeypatch.setattr(
-        "kani.training_data._semantic_dimension_calibration_text", _calibration_text
-    )
-
-    LLMFeatureAnnotator(api_key="test-key")
-
-    assert calls == 0
-    try:
-        LLMFeatureAnnotator._build_prompt("Fix the test")
-    except ValueError as exc:
-        assert "calibration drift" in str(exc)
-    else:
-        raise AssertionError("expected calibration failure during prompt construction")
-    assert calls == 1
+def test_llm_feature_annotator_system_prompt_is_eager() -> None:
+    """_SYSTEM_PROMPT is a class attribute computed at import time (no lazy calibration)."""
+    # _SYSTEM_PROMPT is a class-level constant; accessing it must not raise.
+    prompt = LLMFeatureAnnotator._SYSTEM_PROMPT
+    assert isinstance(prompt, str)
+    assert len(prompt) > 0
 
 
 def test_llm_feature_annotator_prompt_includes_calibration_and_json_contract() -> None:
-    prompt = LLMFeatureAnnotator._build_prompt("Fix the test")
+    system_prompt = LLMFeatureAnnotator._SYSTEM_PROMPT
 
-    assert "Return JSON object only with exactly these keys:" in prompt
-    assert "Each value must be one of: low, medium, high" in prompt
-    assert "Do not include any explanation or markdown" in prompt
-    assert "Fix the test" in prompt
-    keys_intro = prompt.split("Return JSON object only with exactly these keys: ", 1)[1]
-    declared_keys = keys_intro.split(". Each value must be", 1)[0].split(", ")
+    assert "Return ONLY a JSON object with exactly these keys:" in system_prompt
+    assert "Each value MUST be one of: low, medium, high" in system_prompt
+    keys_intro = system_prompt.split(
+        "Return ONLY a JSON object with exactly these keys: ", 1
+    )[1]
+    declared_keys = keys_intro.split(". Each value MUST be", 1)[0].split(", ")
     assert declared_keys == list(SEMANTIC_DIMENSIONS)
     for dim in SEMANTIC_DIMENSIONS:
-        assert dim in prompt
-    assert "- codePresence:" in prompt
-    assert "- reasoningMarkers:" in prompt
-    assert "- agenticTask:" in prompt
+        assert dim in system_prompt
+    assert "- codePresence:" in system_prompt
+    assert "- reasoningMarkers:" in system_prompt
+    assert "- agenticTask:" in system_prompt
 
 
 def test_extract_distilled_feature_examples_prefers_log_labels_and_dedupes() -> None:
@@ -335,11 +319,15 @@ def _capture_annotation_prompt(monkeypatch, prompt: str) -> str:
     assert isinstance(request_json, dict)
     messages = request_json["messages"]
     assert isinstance(messages, list)
-    message = messages[0]
-    assert isinstance(message, dict)
-    content = message["content"]
+    # System/user split: messages[0] is system, messages[1] is user prompt
+    user_message = next(
+        (m for m in messages if isinstance(m, dict) and m.get("role") == "user"),
+        None,
+    )
+    assert user_message is not None
+    content = user_message["content"]
     assert isinstance(content, str)
-    return content.split("Prompt:\n", 1)[1] if "Prompt:\n" in content else content
+    return content
 
 
 def test_annotation_prompt_limit_matches_runtime_classification_default() -> None:

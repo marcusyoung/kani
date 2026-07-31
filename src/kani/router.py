@@ -203,13 +203,6 @@ class Router:
         if profile == "agentic" and agentic_score > 0.6 and tier == "SIMPLE":
             tier = "MEDIUM"
 
-        # --- Force COMPLEX+ tier when conversation contains reasoning_content ---
-        # DeepSeek injects reasoning_content into assistant messages. Routing
-        # such conversations to providers that reject the field (e.g. Mistral)
-        # causes 422 errors. Force tier ≥ COMPLEX to keep them on ollamacloud.
-        if tier in ("SIMPLE", "MEDIUM") and _has_reasoning_content(messages):
-            tier = "COMPLEX"
-
         # --- Look up model in profile tier config with capability/input-limit filtering ---
         resolved_tier, tier_cfg = self._resolve_tier_config(profile_cfg, tier)
         prompt_tokens = _estimate_tokens(messages)

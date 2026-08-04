@@ -17,6 +17,25 @@ default_provider: openrouter   # override to your preferred provider
 default_profile: auto
 
 # ---------------------------------------------------------------------------
+# Scoring Configuration
+# ---------------------------------------------------------------------------
+# disable_axis_overrides: when true, the tier is determined purely by the
+# weighted composite score against thresholds. No axis promotions (agenticTask,
+# complexity_score, reasoning_score). Default: false.
+#
+# ambiguous_bands: per-boundary ambiguity handling. A score within `band` of a
+# tier boundary is ambiguous between the two adjacent tiers; `prefer` names
+# which one wins (LOWER or UPPER). Keys are boundary names:
+#   SIMPLE_MEDIUM, MEDIUM_COMPLEX, COMPLEX_REASONING
+# When unset or empty, behaviour is plain threshold mapping.
+#
+# disable_axis_overrides: true
+# ambiguous_bands:
+#   SIMPLE_MEDIUM:     {band: 0.02, prefer: UPPER}
+#   MEDIUM_COMPLEX:    {band: 0.02, prefer: UPPER}
+#   COMPLEX_REASONING: {band: 0.02, prefer: LOWER}
+
+# ---------------------------------------------------------------------------
 # Routing Configuration
 # ---------------------------------------------------------------------------
 # Session-sticky routing preserves prefix cache locality by pinning a

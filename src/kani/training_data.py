@@ -161,21 +161,11 @@ class LLMFeatureAnnotator:
         "HIGH-IMPACT dimensions (prioritize accuracy): "
         "reasoningMarkers, agenticTask, multiStepPatterns, "
         "questionComplexity, constraintCount, technicalTerms.\n\n"
-        "Definitions:\n"
-        "- codePresence: code present? low=no code, medium=mentions code, high=code blocks\n"
-        "- reasoningMarkers: logical reasoning? low=factual, medium=explanation, high=proofs/deduction\n"
-        "- technicalTerms: domain vocabulary? low=everyday, medium=some jargon, high=dense terms\n"
-        "- creativeMarkers: creative task? low=no, medium=lightly, high=story/poem\n"
-        "- simpleIndicators: trivial? low=complex, medium=moderate, high=simple (high LOWERS score)\n"
-        "- multiStepPatterns: sequential steps? low=single, medium=2-3, high=many\n"
-        "- questionComplexity: depth? low=single Q, medium=2-3 Qs, high=deep probing\n"
-        "- imperativeVerbs: action-oriented? low=informational, medium=some directives, high=commands\n"
-        "- constraintCount: explicit constraints? low=open-ended, medium=1-2, high=many\n"
-        "- outputFormat: format demanded? low=none, medium=vague, high=explicit\n"
-        "- referenceComplexity: external context? low=self-contained, medium=prior chat, high=multi-doc\n"
-        "- negationComplexity: negative constraints? low=none, medium=some, high=many\n"
-        "- domainSpecificity: specialized domain? low=general, medium=somewhat, high=deeply\n"
-        "- agenticTask: tool/file ops? low=info only, medium=tool interaction, high=explicit ops"
+        # Single source of truth: SEMANTIC_DIMENSION_CALIBRATION (above) rendered via
+        # _semantic_dimension_calibration_text(). The eager class-attribute evaluation is
+        # safe because the function is defined earlier in this module and raises at
+        # import time if the calibration dict drifts from SEMANTIC_DIMENSIONS.
+        + _semantic_dimension_calibration_text()
     )
 
     def __init__(

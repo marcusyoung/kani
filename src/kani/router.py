@@ -818,6 +818,7 @@ class Router:
             scorer = Scorer(
                 ScoringConfig(
                     disable_axis_overrides=self.config.disable_axis_overrides,
+                    ambiguous_bands=self.config.ambiguous_bands,
                 ),
                 enable_routing_log=False,
             )

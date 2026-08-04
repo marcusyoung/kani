@@ -19,6 +19,7 @@ from kani.scorer import (
     Scorer,
     ScoringConfig,
     Tier,
+    _tier_from_score,
     inspect_feature_classifier_runtime_status,
 )
 
@@ -380,3 +381,82 @@ class TestDistilledFeatureScorer:
         assert status.exists is True
         assert status.loadable is False
         assert "unloadable" in status.message
+
+
+def _thresholds() -> dict[str, float]:
+    return {"SIMPLE": 0.2, "MEDIUM": 0.58, "COMPLEX": 0.72}
+
+
+class TestAmbiguousBands:
+    def test_no_bands_keeps_plain_threshold_mapping(self) -> None:
+        assert _tier_from_score(0.10, _thresholds()) == Tier.SIMPLE
+        assert _tier_from_score(0.40, _thresholds()) == Tier.MEDIUM
+        assert _tier_from_score(0.60, _thresholds()) == Tier.COMPLEX
+        assert _tier_from_score(0.80, _thresholds()) == Tier.REASONING
+
+    def test_prefer_upper_fails_toward_higher_tier(self) -> None:
+        bands = {
+            "SIMPLE_MEDIUM": {"band": 0.05, "prefer": "UPPER"},
+            "MEDIUM_COMPLEX": {"band": 0.05, "prefer": "UPPER"},
+            "COMPLEX_REASONING": {"band": 0.05, "prefer": "UPPER"},
+        }
+        # SIMPLE/MEDIUM boundary (0.20): 0.18 and 0.22 both ambiguous -> MEDIUM
+        assert _tier_from_score(0.18, _thresholds(), bands) == Tier.MEDIUM
+        assert _tier_from_score(0.22, _thresholds(), bands) == Tier.MEDIUM
+        # 0.12 is safely SIMPLE
+        assert _tier_from_score(0.12, _thresholds(), bands) == Tier.SIMPLE
+        # MEDIUM/COMPLEX boundary (0.58): 0.55 -> COMPLEX
+        assert _tier_from_score(0.55, _thresholds(), bands) == Tier.COMPLEX
+        # COMPLEX/REASONING boundary (0.72): 0.70 -> REASONING (fail up)
+        assert _tier_from_score(0.70, _thresholds(), bands) == Tier.REASONING
+        # 0.80 is safely REASONING
+        assert _tier_from_score(0.80, _thresholds(), bands) == Tier.REASONING
+
+    def test_prefer_lower_fails_toward_cheaper_tier(self) -> None:
+        bands = {"COMPLEX_REASONING": {"band": 0.05, "prefer": "LOWER"}}
+        # 0.70 is below the boundary -> COMPLEX regardless
+        assert _tier_from_score(0.70, _thresholds(), bands) == Tier.COMPLEX
+        # 0.74 is just above the 0.72 boundary -> pulled down to COMPLEX
+        assert _tier_from_score(0.74, _thresholds(), bands) == Tier.COMPLEX
+        # 0.78 is safely REASONING
+        assert _tier_from_score(0.78, _thresholds(), bands) == Tier.REASONING
+
+    def test_zero_band_is_noop(self) -> None:
+        bands = {"SIMPLE_MEDIUM": {"band": 0.0, "prefer": "UPPER"}}
+        assert _tier_from_score(0.10, _thresholds(), bands) == Tier.SIMPLE
+
+    def test_invalid_band_rejected(self) -> None:
+        import pytest
+
+        with pytest.raises(ValueError):
+            _tier_from_score(
+                0.5,
+                _thresholds(),
+                {"SIMPLE_MEDIUM": {"band": -1.0, "prefer": "UPPER"}},
+            )
+        with pytest.raises(ValueError):
+            _tier_from_score(0.5, _thresholds(), {"SIMPLE_MEDIUM": {"band": "wide"}})
+        with pytest.raises(ValueError):
+            _tier_from_score(
+                0.5, _thresholds(), {"SIMPLE_MEDIUM": {"band": 0.05, "prefer": "FAST"}}
+            )
+        with pytest.raises(ValueError):
+            _tier_from_score(
+                0.5, _thresholds(), {"unknown": {"band": 0.05, "prefer": "UPPER"}}
+            )
+
+    def test_axis_override_still_disables_ambiguity_when_disabled(self) -> None:
+        # With disable_axis_overrides=True the base tier (with ambiguity) is returned.
+        from kani.scorer import _tier_from_axes
+
+        bands = {"COMPLEX_REASONING": {"band": 0.1, "prefer": "LOWER"}}
+        labels = {dim: "low" for dim in SEMANTIC_DIMENSIONS}
+        labels["reasoningMarkers"] = "high"
+        tier = _tier_from_axes(
+            0.74,
+            labels,
+            _thresholds(),
+            disable_axis_overrides=True,
+            ambiguous_bands=bands,
+        )
+        assert tier == Tier.COMPLEX

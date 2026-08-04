@@ -413,6 +413,10 @@ class KaniConfig(BaseModel):
     model_rules: list[ModelRuleEntry] = Field(default_factory=list)
     model_capabilities: list[ModelRuleEntry] = Field(default_factory=list)
     disable_axis_overrides: bool = False
+    # Per-boundary ambiguity handling passed to the scorer. Keys are the lower
+    # tier of each boundary pair (SIMPLE, MEDIUM, COMPLEX); values are
+    # {"band": <float>, "fallback": "<TIER>"}. See scorer.ScoringConfig.
+    ambiguous_bands: dict[str, dict[str, float | str]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _normalize_legacy_model_capabilities(self) -> "KaniConfig":

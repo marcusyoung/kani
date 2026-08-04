@@ -16,7 +16,7 @@ from typing import Any, cast
 
 import numpy as np
 from openai import OpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +62,11 @@ class ScoringConfig(BaseModel):
     disable_axis_overrides: bool = False
     fallback_tier: Tier = Tier.MEDIUM
     fallback_confidence: float = 0.35
+    # Per-boundary ambiguity handling. A score landing within `band` of a tier
+    # boundary is ambiguous between the two adjacent tiers; `prefer` names which
+    # one wins ("LOWER" or "UPPER"). Keys are boundary names (SIMPLE_MEDIUM,
+    # MEDIUM_COMPLEX, COMPLEX_REASONING).
+    ambiguous_bands: dict[str, dict[str, float | str]] = Field(default_factory=dict)
 
 
 @dataclass
@@ -140,18 +145,108 @@ def _token_count(text: str) -> int:
     return max(1, len(text.split()))
 
 
-def _tier_from_score(score: float, thresholds: dict[str, float]) -> Tier:
+_AMBIGUOUS_BAND_KEYS = ("SIMPLE_MEDIUM", "MEDIUM_COMPLEX", "COMPLEX_REASONING")
+_AMBIGUOUS_BAND_PAIRS: dict[str, tuple[Tier, Tier]] = {
+    "SIMPLE_MEDIUM": (Tier.SIMPLE, Tier.MEDIUM),
+    "MEDIUM_COMPLEX": (Tier.MEDIUM, Tier.COMPLEX),
+    "COMPLEX_REASONING": (Tier.COMPLEX, Tier.REASONING),
+}
+
+
+def _ambiguous_bands_normalized(
+    ambiguous_bands: dict[str, dict[str, float | str]] | None,
+) -> dict[str, tuple[float, Tier]]:
+    """Normalize per-boundary ambiguity bands into {boundary: (band, winner_tier)}.
+
+    Accepts ``None`` (no bands), or a dict keyed by the boundary name
+    (``SIMPLE_MEDIUM``, ``MEDIUM_COMPLEX``, ``COMPLEX_REASONING``) with ``band``
+    and ``prefer`` entries. ``prefer`` is ``"LOWER"`` or ``"UPPER"``, naming
+    which of the two adjacent tiers wins when a score lands within ``band`` of
+    the boundary. Every band is meaningful on both sides of its boundary, so no
+    entry is dropped.
+    """
+    if not ambiguous_bands:
+        return {}
+
+    normalized: dict[str, tuple[float, Tier]] = {}
+    for boundary_name, spec in ambiguous_bands.items():
+        if not isinstance(spec, dict) or boundary_name not in _AMBIGUOUS_BAND_KEYS:
+            raise ValueError(
+                f"ambiguous_bands entries must be dicts keyed by "
+                f"SIMPLE_MEDIUM/MEDIUM_COMPLEX/COMPLEX_REASONING; got {boundary_name!r}"
+            )
+        try:
+            band = float(spec.get("band", 0.0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"ambiguous_bands[{boundary_name}].band must be numeric"
+            ) from exc
+        if band < 0:
+            raise ValueError(
+                f"ambiguous_bands[{boundary_name}].band must be >= 0; got {band}"
+            )
+        prefer_name = str(spec.get("prefer", "")).strip().upper()
+        if prefer_name not in ("LOWER", "UPPER"):
+            raise ValueError(
+                f"ambiguous_bands[{boundary_name}].prefer must be 'LOWER' or 'UPPER'; got {prefer_name!r}"
+            )
+        lower, upper = _AMBIGUOUS_BAND_PAIRS[boundary_name]
+        winner = upper if prefer_name == "UPPER" else lower
+        normalized[boundary_name] = (band, winner)
+    return normalized
+
+
+def _tier_from_score(
+    score: float,
+    thresholds: dict[str, float],
+    ambiguous_bands: dict[str, dict[str, float | str]] | None = None,
+) -> Tier:
+    """Map a composite score to a tier, optionally rerouting ambiguous scores.
+
+    Args:
+        score: Weighted composite score from all dimensions.
+        thresholds: Dict of tier name -> score threshold.
+        ambiguous_bands: Optional per-boundary ambiguity config. A score landing
+            within ``band`` of a boundary is ambiguous between the two adjacent
+            tiers and rerouted to the tier named by that boundary's ``prefer``
+            (``LOWER`` or ``UPPER``). Boundary keys are SIMPLE_MEDIUM,
+            MEDIUM_COMPLEX, COMPLEX_REASONING. When unset or empty, behavior
+            matches the plain threshold mapping.
+
+    Returns:
+        Final tier.
+    """
     simple_max = float(thresholds.get("SIMPLE", _DEFAULT_THRESHOLDS["SIMPLE"]))
     medium_max = float(thresholds.get("MEDIUM", _DEFAULT_THRESHOLDS["MEDIUM"]))
     complex_max = float(thresholds.get("COMPLEX", _DEFAULT_THRESHOLDS["COMPLEX"]))
 
+    base_tier: Tier
     if score <= simple_max:
-        return Tier.SIMPLE
-    if score <= medium_max:
-        return Tier.MEDIUM
-    if score <= complex_max:
-        return Tier.COMPLEX
-    return Tier.REASONING
+        base_tier = Tier.SIMPLE
+    elif score <= medium_max:
+        base_tier = Tier.MEDIUM
+    elif score <= complex_max:
+        base_tier = Tier.COMPLEX
+    else:
+        base_tier = Tier.REASONING
+
+    bands = _ambiguous_bands_normalized(ambiguous_bands)
+    if not bands:
+        return base_tier
+
+    boundaries = [
+        ("SIMPLE_MEDIUM", simple_max),
+        ("MEDIUM_COMPLEX", medium_max),
+        ("COMPLEX_REASONING", complex_max),
+    ]
+    for boundary_name, boundary_value in boundaries:
+        band_spec = bands.get(boundary_name)
+        if band_spec is None:
+            continue
+        band, winner = band_spec
+        if abs(score - boundary_value) < band:
+            return winner
+    return base_tier
 
 
 def _semantic_axis_score(
@@ -171,6 +266,7 @@ def _tier_from_axes(
     thresholds: dict[str, float],
     *,
     disable_axis_overrides: bool = False,
+    ambiguous_bands: dict[str, dict[str, float | str]] | None = None,
 ) -> Tier:
     """Compute final tier from base score and semantic dimension labels.
 
@@ -180,11 +276,13 @@ def _tier_from_axes(
         thresholds: Dict of tier name -> score threshold.
         disable_axis_overrides: If True, skip axis-based promotions (agenticTask,
             reasoningMarkers, complexity_score) and return ``base_tier`` directly.
+        ambiguous_bands: Optional per-boundary ambiguity config forwarded to
+            ``_tier_from_score`` (see its docstring).
 
     Returns:
         Final tier.
     """
-    base_tier = _tier_from_score(score, thresholds)
+    base_tier = _tier_from_score(score, thresholds, ambiguous_bands=ambiguous_bands)
     if disable_axis_overrides:
         return base_tier
 
@@ -690,6 +788,12 @@ class Scorer:
         for dim in SEMANTIC_DIMENSIONS:
             label = semantic_labels.get(dim, "low")
             value = _DIMENSION_VALUE_MAP.get(label, 0.0)
+            # simpleIndicators is inverse-scored: a HIGH simplicity label means the
+            # prompt is trivial and must LOWER the composite score (matches the
+            # annotator calibration "high LOWERS score"). All other dimensions map
+            # low=0.0, medium=0.5, high=1.0.
+            if dim == "simpleIndicators":
+                value = 1.0 - value
             weight = float(weights.get(dim, 1.0))
             weighted = value * weight
             dimensions.append(
@@ -751,6 +855,7 @@ class Scorer:
             semantic_labels,
             classifier.tier_thresholds,
             disable_axis_overrides=self.config.disable_axis_overrides,
+            ambiguous_bands=self.config.ambiguous_bands,
         )
 
         signals: dict[str, Any] = {

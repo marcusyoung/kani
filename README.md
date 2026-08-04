@@ -324,10 +324,25 @@ kani is distilled-feature-first:
 
 Tier thresholds:
 
-- `REASONING`: `reasoning_score >= 0.75`
-- `COMPLEX`: `complexity_score >= 0.8`
-- `MEDIUM`: `complexity_score >= 0.5`
-- `SIMPLE`: below all thresholds
+- `REASONING`: `score > 0.72`
+- `COMPLEX`: `score > 0.58`
+- `MEDIUM`: `score > 0.20`
+- `SIMPLE`: `score <= 0.20`
+
+`simpleIndicators` is inverse-scored: `high` (trivial prompt) maps to 0.0 and lowers the composite score, matching the annotator calibration.
+
+### Per-boundary ambiguity handling
+
+A score landing within a configurable `band` of a tier boundary is ambiguous between the two adjacent tiers. Each boundary names which tier wins via `prefer: LOWER` or `prefer: UPPER`, so the fail direction is a per-boundary cost/quality decision rather than a blanket default:
+
+```yaml
+ambiguous_bands:
+  SIMPLE_MEDIUM:     {band: 0.02, prefer: UPPER}   # fail up to MEDIUM
+  MEDIUM_COMPLEX:    {band: 0.02, prefer: UPPER}   # fail up to COMPLEX
+  COMPLEX_REASONING: {band: 0.02, prefer: LOWER}   # fail down to COMPLEX
+```
+
+When unset, behaviour is plain threshold mapping. See `config.example.yaml` for full details.
 
 Routing improves through retraining and calibration rather than runtime prompt engineering.
 

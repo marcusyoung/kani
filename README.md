@@ -446,6 +446,10 @@ feature_annotator:
 
 Priority is CLI flags, environment variables, `config.yaml` `feature_annotator`, then built-in defaults.
 
+Annotation requests ask for a JSON object (`response_format.type = "json_object"`) and use
+`temperature 0`; the selected model must support `json_mode`. Models configured for the
+`mistral` provider and `deepseek-v4-flash:0731-cloud`/`ollamacloud` support this.
+
 ## CLI
 
 ```bash

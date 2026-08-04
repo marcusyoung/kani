@@ -330,6 +330,30 @@ def _capture_annotation_prompt(monkeypatch, prompt: str) -> str:
     return content
 
 
+def test_llm_feature_annotator_requests_json_object_response_format(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _post(*args: object, **kwargs: object) -> _AnnotatorResponse:
+        captured["json"] = kwargs["json"]
+        return _AnnotatorResponse()
+
+    monkeypatch.setattr("kani.training_data.httpx.post", _post)
+    annotator = LLMFeatureAnnotator(
+        model="test-model",
+        base_url="http://annotator.example/v1",
+        api_key="test-key",
+    )
+
+    labels = annotator.annotate("Implement feature")
+
+    assert labels is not None
+    request_json = captured["json"]
+    assert isinstance(request_json, dict)
+    assert request_json.get("response_format") == {"type": "json_object"}
+
+
 def test_annotation_prompt_limit_matches_runtime_classification_default() -> None:
     assert ANNOTATION_PROMPT_MAX_CHARS == DEFAULT_CLASSIFICATION_INPUT_MAX_CHARS
 

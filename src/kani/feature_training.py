@@ -31,20 +31,20 @@ EMBEDDING_TEXT_LIMIT = 4000
 VALID_DIMENSION_LABELS = {"low", "medium", "high"}
 DEFAULT_WEIGHTS: dict[str, float] = {
     "tokenCount": 0.15,
-    "codePresence": 1.0,
-    "reasoningMarkers": 1.4,
-    "technicalTerms": 1.1,
-    "creativeMarkers": 0.8,
+    "codePresence": 1.3,
+    "reasoningMarkers": 1.0,
+    "technicalTerms": 1.0,
+    "creativeMarkers": 1.0,
     "simpleIndicators": 1.0,
-    "multiStepPatterns": 1.3,
-    "questionComplexity": 1.2,
+    "multiStepPatterns": 1.2,
+    "questionComplexity": 1.0,
     "imperativeVerbs": 0.9,
-    "constraintCount": 1.2,
-    "outputFormat": 0.9,
-    "referenceComplexity": 1.1,
+    "constraintCount": 1.0,
+    "outputFormat": 1.0,
+    "referenceComplexity": 1.3,
     "negationComplexity": 0.9,
-    "domainSpecificity": 1.1,
-    "agenticTask": 1.4,
+    "domainSpecificity": 1.0,
+    "agenticTask": 0.9,
 }
 DEFAULT_THRESHOLDS: dict[str, float] = {"SIMPLE": 0.2, "MEDIUM": 0.58, "COMPLEX": 0.72}
 

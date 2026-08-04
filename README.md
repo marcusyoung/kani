@@ -405,6 +405,20 @@ uv run python scripts/train_classifier.py \
 
 This writes `models/feature_classifier.pkl` with the classifier, label encoders, weights, thresholds, and embedding metadata.
 
+The classifier head is a scaled multi-layer perceptron (`StandardScaler` +
+`MLPClassifier((128, 32))`) chosen over logistic regression by stratified 5-fold
+cross-validation (`scripts/compare_embeddings.py`): mean held-out accuracy
+0.741 -> 0.799, macro-F1 0.699 -> 0.742, improving all 14 dimensions. Embedding
+and classifier-head variants can be re-evaluated on cached embeddings without
+re-embedding:
+
+```bash
+uv run python scripts/compare_embeddings.py \
+  --models voyage-4 \
+  --heads linear,mlp,histgb \
+  --folds 5
+```
+
 ### Offline feature annotation
 
 Optional annotator configuration:

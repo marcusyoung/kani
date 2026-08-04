@@ -14,10 +14,11 @@ from typing import Any, cast
 
 import numpy as np
 from openai import OpenAI
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report
 from sklearn.multioutput import MultiOutputClassifier
-from sklearn.preprocessing import LabelEncoder
+from sklearn.neural_network import MLPClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 from kani.config import load_config
 from kani.scorer import SEMANTIC_DIMENSIONS, LocalEmbeddingBackend
@@ -223,16 +224,47 @@ def train_feature_classifier(
     X = load_or_compute_embeddings(client, prompts, cache_dir, embedding_model)
     print(f"  Shape: {X.shape}")
 
-    base_clf = LogisticRegression(
-        max_iter=1200,
-        C=1.0,
-        solver="lbfgs",
-        class_weight="balanced",
+    # MLP head on scaled embeddings: evaluated via stratified 5-fold CV against
+    # the previous linear head (compare_embeddings.py) — mean accuracy 0.741 →
+    # 0.799, macro-F1 0.699 → 0.742, winning all 14 dimensions. Hyperparameters
+    # match the evaluated configuration.
+    base_clf = Pipeline(
+        [
+            (
+                "scale",
+                StandardScaler(),
+            ),
+            (
+                "mlp",
+                MLPClassifier(
+                    hidden_layer_sizes=(128, 32),
+                    activation="relu",
+                    solver="adam",
+                    alpha=1e-3,
+                    max_iter=120,
+                    early_stopping=True,
+                    n_iter_no_change=10,
+                    random_state=42,
+                ),
+            ),
+        ]
     )
     clf = MultiOutputClassifier(base_clf)
 
     print("\n--- Training model ---")
     clf.fit(X, y)
+
+    # Drop the per-estimator Adam optimizer state before persisting: the
+    # optimizer moments are training-only and account for ~2/3 of each MLP's
+    # pickle size (~1.06 MB of 1.6 MB). Predictions use only coefs_/intercepts_,
+    # so this is safe and shrinks the bundle ~3x.
+    for estimator in clf.estimators_:
+        step = getattr(estimator, "named_steps", None)
+        if step is None:
+            continue
+        mlp = step.get("mlp")
+        if mlp is not None and hasattr(mlp, "_optimizer"):
+            mlp._optimizer = None
 
     print("\n--- Training report (in-sample) ---")
     y_pred = clf.predict(X)

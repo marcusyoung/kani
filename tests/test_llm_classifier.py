@@ -101,3 +101,44 @@ class TestRoutingLogger:
             assert entry["classification_context"] == {}
 
             RoutingLogger.set_log_dir(Path.home() / ".kani" / "logs")
+
+    def test_log_decision_persists_dual_fields_in_classification_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_dir = Path(tmpdir) / "test_logs"
+            RoutingLogger.set_log_dir(log_dir)
+
+            context = {
+                "text": "[conversation]\nuser: Open the repo",
+                "last_user_message": "Open the repo",
+                "context_text": "user: previous context",
+            }
+
+            RoutingLogger.log_decision(
+                "[conversation]\nuser: Open the repo",
+                tier="MEDIUM",
+                score=0.5,
+                confidence=0.8,
+                signals={
+                    "method": {"raw": "distilled-features", "matches": 0},
+                    "tokenCount": 10,
+                    "semanticLabels": {"agenticTask": "medium"},
+                    "featureVersion": "v1",
+                },
+                agentic_score=0.5,
+                model="model-medium",
+                provider="openrouter",
+                profile="agentic",
+                context=context,
+            )
+
+            log_files = list(log_dir.glob("routing-*.jsonl"))
+            assert len(log_files) == 1
+            with open(log_files[0], encoding="utf-8") as f:
+                entry = json.loads(f.readline())
+
+            cc = entry["classification_context"]
+            assert cc["last_user_message"] == "Open the repo"
+            assert cc["context_text"] == "user: previous context"
+            assert cc["text"] == "[conversation]\nuser: Open the repo"
+
+            RoutingLogger.set_log_dir(Path.home() / ".kani" / "logs")

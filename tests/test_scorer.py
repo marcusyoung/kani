@@ -441,6 +441,81 @@ class TestDistilledFeatureScorer:
         # dual: 2 * embedding_dim = 2 * 3 = 6
         assert classifier.classifier.seen_shape == (1, 6)
 
+    def test_bundle_with_unsupported_embedding_mode_raises_retrain_error(
+        self, tmp_path
+    ) -> None:
+        bundle = _bundle()
+        bundle["embedding_mode"] = "single"
+        _write_bundle(tmp_path, bundle)
+
+        with pytest.raises(ValueError, match="Unsupported embedding_mode"):
+            DistilledFeatureClassifier.load(tmp_path)
+
+    def test_predict_raises_on_embedding_response_count_mismatch(
+        self, tmp_path
+    ) -> None:
+        _write_bundle(tmp_path)
+        one_item = [type("E", (), {"embedding": [0.1, 0.2, 0.3]})()]
+
+        class _OneItemEmbeddings:
+            def create(self, *, input: list[str], model: str) -> Any:
+                return type("R", (), {"data": one_item})()
+
+        class _OneItemClient:
+            def __init__(self) -> None:
+                self.embeddings = _OneItemEmbeddings()
+
+        with (
+            patch(
+                "kani.scorer._resolve_runtime_embedding_settings",
+                return_value=RuntimeEmbeddingSettings(
+                    mode="api",
+                    model="text-embedding-test",
+                    base_url="http://example.test/v1",
+                    api_key="test-key",
+                    timeout_seconds=1.0,
+                ),
+            ),
+            patch(
+                "kani.scorer._resolve_runtime_embedding_client",
+                return_value=(_OneItemClient(), "text-embedding-test", 1.0),
+            ),
+        ):
+            classifier = DistilledFeatureClassifier.load(tmp_path)
+
+            with pytest.raises(ValueError, match="response count mismatch"):
+                classifier.predict("hello", "context")
+
+    def test_local_embedding_dual_batch_embeds_both_texts(self, tmp_path) -> None:
+        _write_bundle(tmp_path)
+        seen_texts: list[str] = []
+
+        def _track_embed(text: str) -> np.ndarray[Any, np.dtype[np.float32]]:
+            seen_texts.append(text)
+            return np.asarray([0.1, 0.2, 0.3], dtype=np.float32)
+
+        with (
+            patch(
+                "kani.scorer._resolve_runtime_embedding_settings",
+                return_value=RuntimeEmbeddingSettings(
+                    mode="local",
+                    model="local-test-model",
+                    base_url=None,
+                    api_key="",
+                    timeout_seconds=1.0,
+                ),
+            ),
+            patch.object(
+                LocalEmbeddingBackend,
+                "embed",
+                side_effect=_track_embed,
+            ),
+        ):
+            classifier = DistilledFeatureClassifier.load(tmp_path)
+            classifier.predict("request-text", "context-text")
+
+        assert seen_texts == ["request-text", "context-text"]
+
 
 def _thresholds() -> dict[str, float]:
     return {"SIMPLE": 0.2, "MEDIUM": 0.58, "COMPLEX": 0.72}

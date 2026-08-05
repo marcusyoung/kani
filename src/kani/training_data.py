@@ -21,7 +21,13 @@ from kani.dirs import data_dir, log_dir
 from kani.scorer import SEMANTIC_DIMENSIONS
 
 VALID_DIMENSION_LABELS = {"low", "medium", "high"}
+
+# The teacher (annotator) sees the full conversation, not the tail-truncated
+# classification text the student embedding sees. This generous cap only guards
+# against API request-size limits; it is deliberately much larger than the
+# runtime classification cap.
 ANNOTATION_PROMPT_MAX_CHARS = DEFAULT_CLASSIFICATION_INPUT_MAX_CHARS
+FULL_CONVERSATION_MAX_CHARS = 50_000
 
 SEMANTIC_DIMENSION_CALIBRATION: dict[str, dict[str, str]] = {
     "codePresence": {
@@ -209,7 +215,7 @@ class LLMFeatureAnnotator:
                 "KANI_LLM_ANNOTATOR_API_KEY or OPENROUTER_API_KEY is required"
             )
 
-        user_text = prompt[:ANNOTATION_PROMPT_MAX_CHARS]
+        user_text = prompt[:FULL_CONVERSATION_MAX_CHARS]
 
         max_retries = 5
         base_delay = 2.0
@@ -359,6 +365,59 @@ def _classification_prompt_from_record(record: dict[str, Any]) -> str:
     return str(record.get("prompt") or record.get("prompt_preview") or "").strip()
 
 
+def _normalize_content(content: Any) -> str:
+    """Normalize a message content value (str or text-part list) to plain text."""
+    if isinstance(content, str):
+        return content.strip()
+
+    if isinstance(content, list):
+        text_chunks: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") != "text":
+                continue
+            text = str(part.get("text", "")).strip()
+            if text:
+                text_chunks.append(text)
+        return "\n".join(text_chunks).strip()
+
+    return ""
+
+
+def _full_conversation_from_record(record: dict[str, Any]) -> str:
+    """Reconstruct the full conversation text from ``record["messages"]``.
+
+    The teacher (annotator) uses this so labels are informed by complete
+    context, while the stored/embedded prompt stays the tail-truncated
+    classification text. Returns "" when the record has no usable messages;
+    callers then fall back to the truncated classification prompt.
+    """
+    messages = record.get("messages")
+    if not isinstance(messages, list):
+        return ""
+
+    lines: list[str] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role", "")).strip().lower()
+        if role not in {"system", "user", "assistant"}:
+            continue
+        text = _normalize_content(message.get("content", ""))
+        if not text:
+            continue
+        lines.append(f"{role}: {text}")
+
+    if not lines:
+        return ""
+
+    conversation = "\n".join(lines)
+    if len(conversation) > FULL_CONVERSATION_MAX_CHARS:
+        conversation = conversation[:FULL_CONVERSATION_MAX_CHARS]
+    return conversation
+
+
 def _make_example(
     prompt: str,
     labels: dict[str, str],
@@ -447,7 +506,8 @@ def extract_distilled_feature_examples(
                 print(f"  [{idx}/{total}] skip: duplicate")
                 continue
             print(f"  [{idx}/{total}] annotate: {prompt[:120].replace(chr(10), ' ')}")
-            labels = annotator.annotate(prompt)
+            annotation_text = _full_conversation_from_record(record) or prompt
+            labels = annotator.annotate(annotation_text)
             source = "annotated"
             annotated_since_save += 1
 

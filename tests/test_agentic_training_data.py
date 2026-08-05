@@ -7,6 +7,7 @@ from kani.classification_context import DEFAULT_CLASSIFICATION_INPUT_MAX_CHARS
 from kani.scorer import SEMANTIC_DIMENSIONS
 from kani.training_data import (
     ANNOTATION_PROMPT_MAX_CHARS,
+    FULL_CONVERSATION_MAX_CHARS,
     LLMFeatureAnnotator,
     SEMANTIC_DIMENSION_CALIBRATION,
     _classification_prompt_from_record,
@@ -173,6 +174,76 @@ def test_extract_distilled_feature_examples_can_annotate_missing_labels() -> Non
     assert examples[0]["source"] == "annotated"
     assert examples[0]["agenticTask"] == "low"
     assert annotator.calls == ["Explain the architecture"]
+
+
+def test_annotator_receives_full_conversation_but_prompt_stays_truncated() -> None:
+    records = [
+        {
+            "timestamp": "2026-03-23T10:00:00+00:00",
+            "classification_context": {
+                "text": "[conversation]\nuser: Final question",
+                "selected_turn_count": 1,
+            },
+            "messages": [
+                {"role": "system", "content": "You are a routing assistant."},
+                {"role": "user", "content": "Long setup question with lots of detail"},
+                {
+                    "role": "assistant",
+                    "content": "Here is a long answer with plenty of context.",
+                },
+                {"role": "user", "content": "Final question"},
+            ],
+            "signals": {},
+        },
+    ]
+    annotator = _StubAnnotator(
+        {
+            "system: You are a routing assistant.\n"
+            "user: Long setup question with lots of detail\n"
+            "assistant: Here is a long answer with plenty of context.\n"
+            "user: Final question": _labels("high")
+        }
+    )
+
+    examples = extract_distilled_feature_examples(records, annotator=annotator)
+
+    assert len(examples) == 1
+    # The student embedding input stays the tail-truncated classification text.
+    assert examples[0]["prompt"] == "[conversation]\nuser: Final question"
+    # The teacher labelled from the full conversation.
+    assert examples[0]["agenticTask"] == "high"
+    assert annotator.calls == [
+        "system: You are a routing assistant.\n"
+        "user: Long setup question with lots of detail\n"
+        "assistant: Here is a long answer with plenty of context.\n"
+        "user: Final question"
+    ]
+
+
+def test_annotator_falls_back_to_truncated_text_without_messages() -> None:
+    records = [
+        {
+            "timestamp": "2026-03-23T10:00:00+00:00",
+            "prompt": "Open the repo and update config",
+            "classification_context": {
+                "text": "[conversation]\nuser: Open the repo and update config",
+                "selected_turn_count": 1,
+            },
+            "signals": {},
+        },
+    ]
+    annotator = _StubAnnotator(
+        {"[conversation]\nuser: Open the repo and update config": _labels("high")}
+    )
+
+    examples = extract_distilled_feature_examples(records, annotator=annotator)
+
+    assert len(examples) == 1
+    assert examples[0]["source"] == "annotated"
+    assert (
+        examples[0]["prompt"] == "[conversation]\nuser: Open the repo and update config"
+    )
+    assert annotator.calls == ["[conversation]\nuser: Open the repo and update config"]
 
 
 def test_build_feature_dataset_persists_examples(tmp_path: Path) -> None:
@@ -354,19 +425,20 @@ def test_llm_feature_annotator_requests_json_object_response_format(
     assert request_json.get("response_format") == {"type": "json_object"}
 
 
-def test_annotation_prompt_limit_matches_runtime_classification_default() -> None:
+def test_annotation_prompt_limit_exceeds_runtime_classification_default() -> None:
+    assert FULL_CONVERSATION_MAX_CHARS > ANNOTATION_PROMPT_MAX_CHARS
     assert ANNOTATION_PROMPT_MAX_CHARS == DEFAULT_CLASSIFICATION_INPUT_MAX_CHARS
 
 
-def test_llm_feature_annotator_bounds_prompt_at_runtime_classification_default(
+def test_llm_feature_annotator_bounds_prompt_at_full_conversation_cap(
     monkeypatch,
 ) -> None:
-    prompt = "a" * (DEFAULT_CLASSIFICATION_INPUT_MAX_CHARS + 300)
+    prompt = "a" * (FULL_CONVERSATION_MAX_CHARS + 300)
 
     sent_prompt = _capture_annotation_prompt(monkeypatch, prompt)
 
-    assert len(sent_prompt) == ANNOTATION_PROMPT_MAX_CHARS
-    assert sent_prompt == prompt[:ANNOTATION_PROMPT_MAX_CHARS]
+    assert len(sent_prompt) == FULL_CONVERSATION_MAX_CHARS
+    assert sent_prompt == prompt[:FULL_CONVERSATION_MAX_CHARS]
 
 
 def test_llm_feature_annotator_does_not_truncate_varied_prompt_at_2000(

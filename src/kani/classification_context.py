@@ -37,6 +37,15 @@ class ClassificationInput:
     selected_assistant_turn_count: int
     truncated: bool
     last_user_is_short_followup: bool
+    # Prior conversation turns as role-prefixed lines, excluding the last user
+    # message. Used by the dual-embedding pipeline to embed request and context
+    # separately (see TASK-037).
+    context_text: str
+
+    @property
+    def dual_embedding_inputs(self) -> tuple[str, str]:
+        """Return (last_user_message, context_text) for split embedding."""
+        return self.last_user_message, self.context_text
 
 
 @dataclass(frozen=True)
@@ -126,6 +135,7 @@ def build_classification_input(
             selected_assistant_turn_count=0,
             truncated=False,
             last_user_is_short_followup=False,
+            context_text="",
         )
 
     selected: list[_NormalizedTurn] = []
@@ -154,6 +164,11 @@ def build_classification_input(
 
     selected.reverse()
 
+    # Prior turns for dual embedding: everything except the last user message,
+    # which sits at the tail of ``selected`` (it is the first turn appended
+    # during the reversed walk and lands last after the reverse).
+    context_turns = selected[:-1] if selected else []
+
     lines: list[str] = []
     lines.append("[conversation]")
     for turn in selected:
@@ -165,6 +180,11 @@ def build_classification_input(
         truncated = True
         classification_text = classification_text[-max_chars:]
 
+    context_lines = [f"{turn.role}: {turn.text}" for turn in context_turns]
+    context_text = "\n".join(context_lines).strip()
+    if len(context_text) > max_chars:
+        context_text = context_text[-max_chars:]
+
     return ClassificationInput(
         text=classification_text,
         last_user_message=last_user_message,
@@ -174,4 +194,5 @@ def build_classification_input(
         selected_assistant_turn_count=selected_assistant_turns,
         truncated=truncated,
         last_user_is_short_followup=_is_short_followup(last_user_message),
+        context_text=context_text,
     )

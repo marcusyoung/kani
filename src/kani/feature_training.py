@@ -183,7 +183,7 @@ def load_feature_examples(
         for item in dataset
     ]
     context_texts = [
-        str(item.get("context_text") or item["prompt"]).strip()[:EMBEDDING_TEXT_LIMIT]
+        str(item.get("context_text") or "").strip()[:EMBEDDING_TEXT_LIMIT]
         for item in dataset
     ]
 

@@ -45,9 +45,9 @@ def test_load_feature_examples_reads_semantic_dimensions(tmp_path: Path) -> None
 
     request_texts, context_texts, labels_by_dimension = load_feature_examples(data_path)
 
-    # Backward-compat: rows without dual fields fall back to prompt for both.
+    # Backward-compat: request falls back to prompt; context falls back to empty.
     assert request_texts == ["prompt-low", "prompt-high"]
-    assert context_texts == ["prompt-low", "prompt-high"]
+    assert context_texts == ["", ""]
     assert labels_by_dimension["agenticTask"] == ["low", "high"]
 
 
@@ -84,7 +84,7 @@ def test_load_feature_examples_backward_compat(tmp_path: Path) -> None:
     request_texts, context_texts, _labels = load_feature_examples(data_path)
 
     assert request_texts == ["prompt-low", "prompt-high"]
-    assert context_texts == ["prompt-low", "prompt-high"]
+    assert context_texts == ["", ""]
 
 
 def test_load_feature_examples_rejects_invalid_labels(tmp_path: Path) -> None:

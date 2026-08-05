@@ -17,8 +17,10 @@ from kani.feature_training import (
 
 def load_agentic_examples(data_path: Path) -> tuple[list[str], list[str]]:
     """Compatibility wrapper returning prompts and agenticTask labels."""
-    prompts, labels_by_dimension = load_feature_examples(data_path)
-    return prompts, labels_by_dimension["agenticTask"]
+    request_texts, _context_texts, labels_by_dimension = load_feature_examples(
+        data_path
+    )
+    return request_texts, labels_by_dimension["agenticTask"]
 
 
 def train_agentic_classifier(

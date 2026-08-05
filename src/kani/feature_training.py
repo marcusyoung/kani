@@ -146,6 +146,7 @@ def build_feature_classifier_bundle(
     embedding_dim: int,
     training_size: int,
     class_distribution: dict[str, dict[str, int]],
+    embedding_mode: str = "dual",
 ) -> dict[str, Any]:
     """Build the persisted classifier bundle metadata."""
     return {
@@ -154,6 +155,7 @@ def build_feature_classifier_bundle(
         "semantic_dimensions": semantic_dimensions,
         "embedding_model": embedding_model,
         "embedding_dim": embedding_dim,
+        "embedding_mode": embedding_mode,
         "training_size": training_size,
         "class_distribution": class_distribution,
         "weights": DEFAULT_WEIGHTS,
@@ -162,7 +164,9 @@ def build_feature_classifier_bundle(
     }
 
 
-def load_feature_examples(data_path: Path) -> tuple[list[str], dict[str, list[str]]]:
+def load_feature_examples(
+    data_path: Path,
+) -> tuple[list[str], list[str], dict[str, list[str]]]:
     with open(data_path, encoding="utf-8") as f:
         dataset = json.load(f)
 
@@ -172,6 +176,17 @@ def load_feature_examples(data_path: Path) -> tuple[list[str], dict[str, list[st
     if any(not prompt for prompt in prompts):
         raise ValueError("Feature training dataset contains empty prompts")
 
+    request_texts = [
+        str(item.get("last_user_message") or item["prompt"]).strip()[
+            :EMBEDDING_TEXT_LIMIT
+        ]
+        for item in dataset
+    ]
+    context_texts = [
+        str(item.get("context_text") or item["prompt"]).strip()[:EMBEDDING_TEXT_LIMIT]
+        for item in dataset
+    ]
+
     labels_by_dimension: dict[str, list[str]] = {dim: [] for dim in SEMANTIC_DIMENSIONS}
     for item in dataset:
         for dim in SEMANTIC_DIMENSIONS:
@@ -180,7 +195,7 @@ def load_feature_examples(data_path: Path) -> tuple[list[str], dict[str, list[st
                 raise ValueError(f"Invalid label for {dim}: {label}")
             labels_by_dimension[dim].append(label)
 
-    return prompts, labels_by_dimension
+    return request_texts, context_texts, labels_by_dimension
 
 
 def train_feature_classifier(
@@ -189,8 +204,8 @@ def train_feature_classifier(
     output_dir: Path,
     cache_dir: Path,
 ) -> Path:
-    prompts, labels_by_dimension = load_feature_examples(data_path)
-    print(f"Loaded {len(prompts)} prompts")
+    request_texts, context_texts, labels_by_dimension = load_feature_examples(data_path)
+    print(f"Loaded {len(request_texts)} examples")
 
     label_encoders: dict[str, LabelEncoder] = {}
     encoded_targets: list[np.ndarray[Any, np.dtype[np.int_]]] = []
@@ -221,8 +236,22 @@ def train_feature_classifier(
 
     print("\n--- Embeddings ---")
     client, embedding_model = build_embedding_client()
-    X = load_or_compute_embeddings(client, prompts, cache_dir, embedding_model)
-    print(f"  Shape: {X.shape}")
+
+    # Dual-embedding: interleave request and context texts so get_embeddings
+    # is called once with both sides batched together, then split by parity.
+    interleaved_texts: list[str] = []
+    for request, context in zip(request_texts, context_texts):
+        interleaved_texts.append(request)
+        interleaved_texts.append(context)
+
+    all_embeddings = load_or_compute_embeddings(
+        client, interleaved_texts, cache_dir, embedding_model
+    )
+    embedding_dim = int(all_embeddings.shape[1])
+    request_embeddings = all_embeddings[0::2]
+    context_embeddings = all_embeddings[1::2]
+    X = np.hstack([request_embeddings, context_embeddings])
+    print(f"  Shape: {X.shape} (2 x {embedding_dim})")
 
     # MLP head on scaled embeddings: evaluated via stratified 5-fold CV against
     # the previous linear head (compare_embeddings.py) — mean accuracy 0.741 →
@@ -294,8 +323,9 @@ def train_feature_classifier(
         label_encoders=label_encoders,
         semantic_dimensions=list(SEMANTIC_DIMENSIONS),
         embedding_model=embedding_model,
-        embedding_dim=int(X.shape[1]),
-        training_size=len(prompts),
+        embedding_dim=embedding_dim,
+        embedding_mode="dual",
+        training_size=len(request_texts),
         class_distribution=class_distribution,
     )
     with open(model_path, "wb") as f:

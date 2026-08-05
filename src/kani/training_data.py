@@ -135,6 +135,8 @@ class FeatureAnnotator(Protocol):
 
 class DistilledFeatureExample(TypedDict):
     prompt: str
+    last_user_message: str
+    context_text: str
     tokenCount: int
     codePresence: str
     reasoningMarkers: str
@@ -348,6 +350,40 @@ def _extract_semantic_labels_from_record(
     return {dim: labels[dim] for dim in SEMANTIC_DIMENSIONS}
 
 
+def _classification_dual_inputs_from_record(
+    record: dict[str, Any],
+) -> tuple[str, str, str]:
+    """Extract (text, last_user_message, context_text) from a routing record.
+
+    Returns the truncated classification text alongside the split request/context
+    texts used by the dual-embedding training pipeline. Falls back to empty
+    strings for last_user_message and context_text when unavailable; callers
+    then use prompt for both sides.
+    """
+    context = record.get("classification_context")
+    if isinstance(context, dict):
+        text = str(context.get("text") or "").strip()
+        if text:
+            last_user = str(context.get("last_user_message") or "").strip()
+            context_text = str(context.get("context_text") or "").strip()
+            return text, last_user, context_text
+
+    messages = record.get("messages")
+    if isinstance(messages, list):
+        try:
+            classification_input = build_classification_input(messages)
+            return (
+                classification_input.text,
+                classification_input.last_user_message,
+                classification_input.context_text,
+            )
+        except Exception:
+            pass
+
+    fallback = str(record.get("prompt") or record.get("prompt_preview") or "").strip()
+    return fallback, "", ""
+
+
 def _classification_prompt_from_record(record: dict[str, Any]) -> str:
     context = record.get("classification_context")
     if isinstance(context, dict):
@@ -420,12 +456,16 @@ def _full_conversation_from_record(record: dict[str, Any]) -> str:
 
 def _make_example(
     prompt: str,
+    last_user_message: str,
+    context_text: str,
     labels: dict[str, str],
     record: dict[str, Any],
     source: str,
 ) -> DistilledFeatureExample:
     return {
         "prompt": prompt,
+        "last_user_message": last_user_message,
+        "context_text": context_text,
         "tokenCount": deterministic_token_count(prompt),
         "codePresence": labels["codePresence"],
         "reasoningMarkers": labels["reasoningMarkers"],
@@ -490,7 +530,9 @@ def extract_distilled_feature_examples(
     total = len(records)
 
     for idx, record in enumerate(records, 1):
-        prompt = _classification_prompt_from_record(record)
+        prompt, last_user_message, context_text = (
+            _classification_dual_inputs_from_record(record)
+        )
         if not prompt:
             skipped += 1
             print(f"  [{idx}/{total}] skip: empty prompt")
@@ -519,7 +561,9 @@ def extract_distilled_feature_examples(
         if not _validate_semantic_labels(labels):
             continue
 
-        example = _make_example(prompt, labels, record, source)
+        example = _make_example(
+            prompt, last_user_message, context_text, labels, record, source
+        )
 
         current = latest_by_prompt.get(prompt)
         if current is None or (example["timestamp"] or "") >= (

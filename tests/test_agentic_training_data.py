@@ -10,7 +10,9 @@ from kani.training_data import (
     FULL_CONVERSATION_MAX_CHARS,
     LLMFeatureAnnotator,
     SEMANTIC_DIMENSION_CALIBRATION,
+    _classification_dual_inputs_from_record,
     _classification_prompt_from_record,
+    _make_example,
     _semantic_dimension_calibration_text,
     build_feature_dataset,
     deterministic_token_count,
@@ -124,6 +126,9 @@ def test_extract_distilled_feature_examples_prefers_log_labels_and_dedupes() -> 
     assert (
         examples[0]["prompt"] == "[conversation]\nuser: Open the repo and update config"
     )
+    # classification_context lacks dual fields; both fall back to empty strings
+    assert examples[0]["last_user_message"] == ""
+    assert examples[0]["context_text"] == ""
     assert examples[0]["agenticTask"] == "medium"
     assert examples[0]["source"] == "log"
     assert examples[0]["tokenCount"] == 8
@@ -138,6 +143,79 @@ def test_classification_prompt_from_record_prefers_context_text() -> None:
     prompt = _classification_prompt_from_record(record)
 
     assert prompt == "[conversation]\nuser: long context"
+
+
+def test_classification_dual_inputs_from_record_prefers_context_fields() -> None:
+    record = {
+        "prompt": "short",
+        "classification_context": {
+            "text": "[conversation]\nuser: long context",
+            "last_user_message": "long context",
+            "context_text": "user: earlier turn",
+        },
+    }
+
+    text, last_user_message, context_text = _classification_dual_inputs_from_record(
+        record
+    )
+
+    assert text == "[conversation]\nuser: long context"
+    assert last_user_message == "long context"
+    assert context_text == "user: earlier turn"
+
+
+def test_classification_dual_inputs_from_record_rebuilds_from_messages() -> None:
+    record = {
+        "messages": [
+            {"role": "system", "content": "Use concise output"},
+            {"role": "user", "content": "Create migration steps for the database"},
+            {"role": "user", "content": "続けて"},
+        ]
+    }
+
+    text, last_user_message, context_text = _classification_dual_inputs_from_record(
+        record
+    )
+
+    assert "続けて" in text
+    assert "Create migration steps for the database" in text
+    assert last_user_message == "続けて"
+    assert context_text == "user: Create migration steps for the database"
+
+
+def test_classification_dual_inputs_from_record_falls_back_to_prompt() -> None:
+    record = {"prompt": "Hello world"}
+
+    text, last_user_message, context_text = _classification_dual_inputs_from_record(
+        record
+    )
+
+    assert text == "Hello world"
+    assert last_user_message == ""
+    assert context_text == ""
+
+
+def test_make_example_stores_dual_inputs() -> None:
+    record = {
+        "timestamp": "2026-03-23T10:00:00+00:00",
+        "prompt": "Open the repo",
+        "signals": {"semanticLabels": _labels("medium")},
+    }
+
+    example = _make_example(
+        "Open the repo",
+        "Open the repo",
+        "user: previous turn",
+        _labels("medium"),
+        record,
+        "log",
+    )
+
+    assert example["prompt"] == "Open the repo"
+    assert example["last_user_message"] == "Open the repo"
+    assert example["context_text"] == "user: previous turn"
+    assert example["tokenCount"] == 3
+    assert example["source"] == "log"
 
 
 def test_classification_prompt_from_record_can_rebuild_from_messages() -> None:

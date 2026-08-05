@@ -465,6 +465,7 @@ def _write_doctor_feature_bundle(
         "semantic_dimensions": list(SEMANTIC_DIMENSIONS),
         "embedding_model": embedding_model,
         "embedding_dim": 3,
+        "embedding_mode": "dual",
         "weights": {
             "tokenCount": 0.2,
             **{dimension: 1.0 for dimension in SEMANTIC_DIMENSIONS},

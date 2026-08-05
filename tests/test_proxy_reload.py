@@ -10,18 +10,24 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 import kani.proxy as proxy_mod
+from kani.classification_context import ClassificationInput
 from kani.config import ContentPartPolicy, KaniConfig, ModelRuleEntry, ProviderConfig
 from kani.proxy import RuntimeState, app, configure
 from kani.router import Router, RoutingDecision
 from kani.scorer import ClassificationResult, Tier
 
 
-def _simple_classification(_: object, text: str) -> ClassificationResult:
+def _simple_classification(
+    _: object, classification_input: ClassificationInput
+) -> ClassificationResult:
     return ClassificationResult(
         score=0.0,
         tier=Tier.SIMPLE,
         confidence=0.9,
-        signals={"method": {"raw": "test"}, "tokenCount": len(text.split())},
+        signals={
+            "method": {"raw": "test"},
+            "tokenCount": len(classification_input.text.split()),
+        },
     )
 
 

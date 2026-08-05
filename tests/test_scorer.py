@@ -9,7 +9,9 @@ from typing import Any
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 
+from kani.classification_context import ClassificationInput
 from kani.scorer import (
     DistilledFeatureClassifier,
     LocalEmbeddingBackend,
@@ -53,8 +55,10 @@ class _FakeEmbeddings:
         self.calls.append({"input": input, "model": model})
         if self.delay:
             time.sleep(self.delay)
-        item = type("EmbeddingItem", (), {"embedding": self.embedding})()
-        return type("EmbeddingResponse", (), {"data": [item]})()
+        items = [
+            type("EmbeddingItem", (), {"embedding": self.embedding})() for _ in input
+        ]
+        return type("EmbeddingResponse", (), {"data": items})()
 
 
 class _FakeEmbeddingClient:
@@ -71,6 +75,7 @@ def _bundle(*, classifier: Any | None = None, embedding_dim: int = 3) -> dict[st
         "semantic_dimensions": list(SEMANTIC_DIMENSIONS),
         "embedding_model": "text-embedding-test",
         "embedding_dim": embedding_dim,
+        "embedding_mode": "dual",
         "training_size": 1,
         "class_distribution": {},
         "weights": {
@@ -88,6 +93,20 @@ def _write_bundle(model_dir: Path, bundle: dict[str, Any] | None = None) -> Path
     with model_path.open("wb") as f:
         pickle.dump(bundle or _bundle(), f)
     return model_path
+
+
+def _classification_input(text: str, context: str = "") -> ClassificationInput:
+    return ClassificationInput(
+        text=text,
+        last_user_message=text,
+        system_prompt="",
+        selected_turn_count=1,
+        selected_user_turn_count=1,
+        selected_assistant_turn_count=0,
+        truncated=False,
+        last_user_is_short_followup=False,
+        context_text=context,
+    )
 
 
 class TestDistilledFeatureScorer:
@@ -112,12 +131,12 @@ class TestDistilledFeatureScorer:
             return_value=(embedding_client, "unused-model"),
         ):
             classifier = DistilledFeatureClassifier.load(tmp_path)
-            labels, confidence = classifier.predict("hello")
+            labels, confidence = classifier.predict("hello", "")
 
         assert confidence == 0.85
         assert set(labels) == set(SEMANTIC_DIMENSIONS)
         assert set(labels.values()) == {"medium"}
-        assert classifier.classifier.seen_shape == (1, 3)
+        assert classifier.classifier.seen_shape == (1, 6)
         assert embedding_client.embeddings.calls[0]["model"] == "text-embedding-test"
 
     def test_feature_model_dir_success_returns_distilled_features(
@@ -132,7 +151,7 @@ class TestDistilledFeatureScorer:
         ):
             result = Scorer(
                 feature_model_dir=tmp_path, enable_routing_log=False
-            ).classify("prove this theorem")
+            ).classify(_classification_input("prove this theorem"))
 
         assert isinstance(result, ClassificationResult)
         assert result.signals["method"]["raw"] == "distilled-features"
@@ -144,7 +163,7 @@ class TestDistilledFeatureScorer:
 
     def test_missing_model_returns_default_fallback(self, tmp_path) -> None:
         result = Scorer(feature_model_dir=tmp_path, enable_routing_log=False).classify(
-            "prove why this is complex"
+            _classification_input("prove why this is complex")
         )
 
         assert result.tier == Tier.MEDIUM
@@ -159,7 +178,7 @@ class TestDistilledFeatureScorer:
 
         result = Scorer(
             config=config, feature_model_dir=tmp_path, enable_routing_log=False
-        ).classify("anything")
+        ).classify(_classification_input("anything"))
 
         assert result.tier == Tier.COMPLEX
         assert result.confidence == 0.31
@@ -174,7 +193,7 @@ class TestDistilledFeatureScorer:
         ):
             result = Scorer(
                 feature_model_dir=tmp_path, enable_routing_log=False
-            ).classify("fix this bug")
+            ).classify(_classification_input("fix this bug"))
 
         assert result.signals["method"]["raw"] == "default"
         assert result.dimensions == []
@@ -202,7 +221,7 @@ class TestDistilledFeatureScorer:
         ):
             result = Scorer(
                 feature_model_dir=tmp_path, enable_routing_log=False
-            ).classify("hello")
+            ).classify(_classification_input("hello"))
 
         assert result.signals["method"]["raw"] == "default"
         assert result.confidence == 0.35
@@ -230,10 +249,10 @@ class TestDistilledFeatureScorer:
             ),
         ):
             classifier = DistilledFeatureClassifier.load(tmp_path)
-            classifier.predict("hello")
+            classifier.predict("hello", "")
 
         assert embedding_client.embeddings.calls == [
-            {"input": ["hello"], "model": "configured-embedding"}
+            {"input": ["hello", ""], "model": "configured-embedding"}
         ]
 
     def test_local_embedding_backend_does_not_call_api(self, tmp_path) -> None:
@@ -263,7 +282,7 @@ class TestDistilledFeatureScorer:
         ):
             result = Scorer(
                 feature_model_dir=tmp_path, enable_routing_log=False
-            ).classify("hello")
+            ).classify(_classification_input("hello"))
 
         assert result.signals["method"]["raw"] == "distilled-features"
         assert api_client.embeddings.calls == []
@@ -283,7 +302,7 @@ class TestDistilledFeatureScorer:
         ):
             result = Scorer(
                 feature_model_dir=tmp_path, enable_routing_log=False
-            ).classify("hello")
+            ).classify(_classification_input("hello"))
 
         assert result.tier == Tier.MEDIUM
         assert result.confidence == 0.35
@@ -335,7 +354,7 @@ class TestDistilledFeatureScorer:
         ):
             result = Scorer(
                 feature_model_dir=tmp_path, enable_routing_log=False
-            ).classify("hello")
+            ).classify(_classification_input("hello"))
 
         assert result.signals["method"]["raw"] == "default"
 
@@ -349,7 +368,7 @@ class TestDistilledFeatureScorer:
         ):
             result = Scorer(
                 feature_model_dir=tmp_path, enable_routing_log=False
-            ).classify("hello")
+            ).classify(_classification_input("hello"))
 
         assert result.signals["method"]["raw"] == "default"
         assert result.dimensions == []
@@ -364,7 +383,7 @@ class TestDistilledFeatureScorer:
         ) as heuristic:
             result = Scorer(
                 feature_model_dir=tmp_path, enable_routing_log=False
-            ).classify("fix this bug and run tests")
+            ).classify(_classification_input("fix this bug and run tests"))
 
         heuristic.assert_not_called()
         assert result.signals["method"]["raw"] == "default"
@@ -381,6 +400,46 @@ class TestDistilledFeatureScorer:
         assert status.exists is True
         assert status.loadable is False
         assert "unloadable" in status.message
+
+    def test_bundle_without_embedding_mode_raises_retrain_error(self, tmp_path) -> None:
+        bundle = _bundle()
+        del bundle["embedding_mode"]
+        _write_bundle(tmp_path, bundle)
+
+        with pytest.raises(ValueError, match="predates dual embedding"):
+            DistilledFeatureClassifier.load(tmp_path)
+
+    def test_predict_passes_both_texts_in_single_api_call(self, tmp_path) -> None:
+        _write_bundle(tmp_path)
+        embedding_client = _FakeEmbeddingClient([0.1, 0.2, 0.3])
+
+        with patch(
+            "kani.scorer._resolve_runtime_embedding_client",
+            return_value=(embedding_client, "unused-model"),
+        ):
+            classifier = DistilledFeatureClassifier.load(tmp_path)
+            classifier.predict("hello", "previous context")
+
+        assert len(embedding_client.embeddings.calls) == 1
+        assert embedding_client.embeddings.calls[0]["input"] == [
+            "hello",
+            "previous context",
+        ]
+
+    def test_predict_concatenates_dual_embeddings(self, tmp_path) -> None:
+        fake_classifier = _FakeClassifier(encoded_label=1)
+        _write_bundle(tmp_path, _bundle(classifier=fake_classifier))
+        embedding_client = _FakeEmbeddingClient([0.1, 0.2, 0.3])
+
+        with patch(
+            "kani.scorer._resolve_runtime_embedding_client",
+            return_value=(embedding_client, "unused-model"),
+        ):
+            classifier = DistilledFeatureClassifier.load(tmp_path)
+            classifier.predict("request", "context")
+
+        # dual: 2 * embedding_dim = 2 * 3 = 6
+        assert classifier.classifier.seen_shape == (1, 6)
 
 
 def _thresholds() -> dict[str, float]:
@@ -426,8 +485,6 @@ class TestAmbiguousBands:
         assert _tier_from_score(0.10, _thresholds(), bands) == Tier.SIMPLE
 
     def test_invalid_band_rejected(self) -> None:
-        import pytest
-
         with pytest.raises(ValueError):
             _tier_from_score(
                 0.5,

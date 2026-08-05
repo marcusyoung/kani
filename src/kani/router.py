@@ -822,7 +822,7 @@ class Router:
                 ),
                 enable_routing_log=False,
             )
-            result = scorer.classify(classification_input.text)
+            result = scorer.classify(classification_input)
             tier_val = result.tier
             if hasattr(tier_val, "value"):
                 tier_val = tier_val.value

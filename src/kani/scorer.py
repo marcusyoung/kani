@@ -18,6 +18,8 @@ import numpy as np
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
+from kani.classification_context import ClassificationInput
+
 log = logging.getLogger(__name__)
 
 RUNTIME_FEATURE_CLASSIFIER_SUPPORTED = True
@@ -455,6 +457,7 @@ class DistilledFeatureClassifier:
         tier_thresholds: dict[str, float],
         feature_schema_version: str,
         model_path: Path,
+        embedding_mode: str = "dual",
         embedding_timeout_seconds: float = FEATURE_EMBEDDING_TIMEOUT_SECONDS,
         runtime_embedding_mode: str = "api",
         runtime_embedding_model: str = "",
@@ -464,6 +467,7 @@ class DistilledFeatureClassifier:
         self.label_encoders = label_encoders
         self.embedding_model = embedding_model
         self.embedding_dim = embedding_dim
+        self.embedding_mode = embedding_mode
         self.weights = weights
         self.tier_thresholds = tier_thresholds
         self.feature_schema_version = feature_schema_version
@@ -508,6 +512,18 @@ class DistilledFeatureClassifier:
         if missing:
             raise ValueError(
                 f"feature classifier bundle missing fields: {', '.join(missing)}"
+            )
+
+        embedding_mode = str(bundle.get("embedding_mode", ""))
+        if not embedding_mode:
+            raise ValueError(
+                "This feature classifier bundle predates dual embedding support. "
+                "Please retrain your model with `kani train-feature-classifier`."
+            )
+        if embedding_mode != "dual":
+            raise ValueError(
+                f"Unsupported embedding_mode {embedding_mode!r}; expected 'dual'. "
+                "Please retrain your model with `kani train-feature-classifier`."
             )
 
         semantic_dimensions = tuple(str(dim) for dim in bundle["semantic_dimensions"])
@@ -569,6 +585,7 @@ class DistilledFeatureClassifier:
             label_encoders=label_encoders,
             embedding_model=bundle_embedding_model,
             embedding_dim=embedding_dim,
+            embedding_mode=embedding_mode,
             weights=_as_float_mapping(bundle["weights"], name="weights"),
             tier_thresholds=_as_float_mapping(
                 bundle["tier_thresholds"], name="tier_thresholds"
@@ -581,9 +598,12 @@ class DistilledFeatureClassifier:
             embedding_model_mismatch=embedding_model_mismatch,
         )
 
-    def predict(self, text: str) -> tuple[dict[str, str], float]:
-        embedding = self._embed_text(text)
-        raw_prediction = self.classifier.predict(embedding.reshape(1, -1))
+    def predict(
+        self, request_text: str, context_text: str
+    ) -> tuple[dict[str, str], float]:
+        embeddings = self._embed_texts([request_text, context_text])
+        concatenated = np.hstack(embeddings).reshape(1, -1)
+        raw_prediction = self.classifier.predict(concatenated)
         prediction = np.asarray(raw_prediction)
         if prediction.shape != (1, len(SEMANTIC_DIMENSIONS)):
             raise ValueError(
@@ -605,7 +625,14 @@ class DistilledFeatureClassifier:
         )
         return semantic_labels, confidence
 
-    def _embed_text(self, text: str) -> np.ndarray[Any, np.dtype[np.float32]]:
+    def _embed_texts(
+        self, texts: list[str]
+    ) -> list[np.ndarray[Any, np.dtype[np.float32]]]:
+        """Embed multiple texts in a single batched API call.
+
+        Returns a list of 1-D arrays, one per input text, each with shape
+        ``(embedding_dim,)``.
+        """
         try:
             settings = _resolve_runtime_embedding_settings()
         except Exception as exc:
@@ -620,13 +647,13 @@ class DistilledFeatureClassifier:
         if settings.mode == "disabled":
             raise RuntimeError("embedding mode is disabled")
 
-        truncated_text = text[:EMBEDDING_TEXT_LIMIT]
+        truncated_texts = [text[:EMBEDDING_TEXT_LIMIT] for text in texts]
         timeout_seconds = settings.timeout_seconds
         log.debug(
-            "Requesting runtime embedding mode=%s model=%s text_length=%d timeout=%s",
+            "Requesting runtime embeddings mode=%s model=%s count=%d timeout=%s",
             settings.mode,
             settings.model,
-            len(truncated_text),
+            len(truncated_texts),
             timeout_seconds,
         )
 
@@ -641,12 +668,14 @@ class DistilledFeatureClassifier:
                     client, model, timeout_seconds = resolved
                 future = executor.submit(
                     client.embeddings.create,
-                    input=[truncated_text],
+                    input=truncated_texts,
                     model=model,
                 )
             elif settings.mode == "local":
                 backend = LocalEmbeddingBackend(settings.model)
-                future = executor.submit(backend.embed, truncated_text)
+                future = executor.submit(
+                    lambda: [backend.embed(t) for t in truncated_texts]
+                )
             else:
                 raise RuntimeError(f"unsupported embedding mode: {settings.mode}")
             try:
@@ -656,21 +685,32 @@ class DistilledFeatureClassifier:
                 raise TimeoutError("runtime embedding request timed out") from exc
 
         if settings.mode == "local":
-            embedding = np.asarray(response, dtype=np.float32)
+            embeddings = [np.asarray(emb, dtype=np.float32) for emb in response]
         else:
             data = getattr(response, "data", None)
             if not data:
                 raise ValueError("embedding response did not include data")
-            values = getattr(data[0], "embedding", None)
-            if values is None:
-                raise ValueError("embedding response item did not include embedding")
-            embedding = np.asarray(values, dtype=np.float32)
-        if embedding.shape != (self.embedding_dim,):
-            raise ValueError(
-                "embedding dimension mismatch: "
-                f"expected {self.embedding_dim}, got {embedding.shape}"
-            )
-        return cast(np.ndarray[Any, np.dtype[np.float32]], embedding)
+            if len(data) != len(truncated_texts):
+                raise ValueError(
+                    "embedding response count mismatch: "
+                    f"expected {len(truncated_texts)}, got {len(data)}"
+                )
+            embeddings = []
+            for item in data:
+                values = getattr(item, "embedding", None)
+                if values is None:
+                    raise ValueError(
+                        "embedding response item did not include embedding"
+                    )
+                embeddings.append(np.asarray(values, dtype=np.float32))
+
+        for index, embedding in enumerate(embeddings):
+            if embedding.shape != (self.embedding_dim,):
+                raise ValueError(
+                    f"embedding dimension mismatch at index {index}: "
+                    f"expected {self.embedding_dim}, got {embedding.shape}"
+                )
+        return [cast(np.ndarray[Any, np.dtype[np.float32]], emb) for emb in embeddings]
 
 
 def inspect_feature_classifier_runtime_status(
@@ -834,8 +874,10 @@ class Scorer:
             self._feature_classifier = None
         return self._feature_classifier
 
-    def _classify_with_features(self, text: str) -> ClassificationResult:
-        token_count = _token_count(text)
+    def _classify_with_features(
+        self, classification_input: ClassificationInput
+    ) -> ClassificationResult:
+        token_count = _token_count(classification_input.text)
         classifier = self._load_feature_classifier()
         if classifier is None:
             if self._feature_classifier_load_error is not None:
@@ -844,7 +886,8 @@ class Scorer:
                 ) from self._feature_classifier_load_error
             raise RuntimeError("distilled feature classifier unavailable")
 
-        semantic_labels, confidence = classifier.predict(text)
+        request_text, context_text = classification_input.dual_embedding_inputs
+        semantic_labels, confidence = classifier.predict(request_text, context_text)
         dimensions, score, agentic_score = self._build_dimensions(
             token_count,
             semantic_labels,
@@ -884,10 +927,15 @@ class Scorer:
             dimensions=[],
         )
 
-    def classify(self, text: str) -> ClassificationResult:
-        log.debug("Scoring classification input text_length=%d", len(text))
+    def classify(
+        self, classification_input: ClassificationInput
+    ) -> ClassificationResult:
+        log.debug(
+            "Scoring classification input text_length=%d",
+            len(classification_input.text),
+        )
         try:
-            result = self._classify_with_features(text)
+            result = self._classify_with_features(classification_input)
         except TimeoutError as exc:
             log.warning("Runtime embedding timed out, using default fallback: %s", exc)
             result = self._default_result()
@@ -904,5 +952,5 @@ class Scorer:
         if self._enable_routing_log:
             from kani.logger import RoutingLogger
 
-            RoutingLogger.log(text, result)
+            RoutingLogger.log(classification_input.text, result)
         return result

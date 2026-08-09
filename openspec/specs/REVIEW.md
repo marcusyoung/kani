@@ -36,7 +36,7 @@
 以下の動作はコードから読み取ったが、テストで直接カバーされていない:
 
 - **Proxy: ストリーミング開始後のリトライ不可** — コード上は開始済み StreamingResponse の途中失敗では同一レスポンス内フォールバックできない。テストでは未カバー
-- **Proxy: stream_options.include_usage 注入** — コードで確認。テストでは未カバー
+- **Proxy: stream_options.include_usage 注入** — `test_streaming_multi_chunk_usage_logs_once` で使用量ログがリクエストごとに1回だけ記録されることを確認 (2026-08-09 追記)。include_usage 注入自体はコードで確認
 - **Proxy: URL 構築 (/v1 末尾の正規化)** — `proxy.py` のロジックから推測。テストでは未カバー
 - **Config: 環境変数未設定時の空文字列置換** — `resolve_env` の `os.environ.get(var, "")` から推測
 - **Config: deep merge オーバーライド** — コードから推測。統合テストでは未カバー

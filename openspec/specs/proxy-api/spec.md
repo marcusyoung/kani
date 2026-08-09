@@ -217,6 +217,16 @@ OpenAI API 互換の HTTP プロキシ。クライアントからのリクエス
 - THEN stderr に `USAGE request_id=... model=... provider=... prompt=... completion=... total=... profile=... elapsed_ms=...` を出力する
 - AND JSONL 実行ログに記録する
 
+#### Scenario: ストリーミングリクエストの使用量記録 (1リクエスト1レコード)
+
+- GIVEN ストリーミングリクエストが正常に完了する
+- AND 複数のチャンクが usage 情報を含む
+- WHEN ストリームが終了する
+- THEN リクエストごとに JSONL 実行ログを1レコードだけ記録する
+- AND 記録する prompt_tokens / completion_tokens は最後の usage チャンクの累積値である
+- AND 記録する elapsed_ms はストリーム終了時点の総経過時間である
+- AND usage を含まないチャンクのみのストリームでは実行ログに記録しない
+
 ### Requirement: レスポンスヘッダ (ルーティングモード)
 
 ルーティングモードでは、ルーティング決定の情報をレスポンスヘッダに含めなければならない (SHALL)。

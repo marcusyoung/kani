@@ -395,6 +395,8 @@ Reload validates with strict config validation. Changes to `host` or `port` are 
 
 All routing decisions are logged to `$XDG_STATE_HOME/kani/log/routing-YYYY-MM-DD.jsonl`, defaulting to `~/.local/state/kani/log/`.
 
+Token usage per request is logged to `execution-YYYY-MM-DD.jsonl` in the same directory. Each completed request produces exactly one execution record (streaming requests included) containing the final cumulative `prompt_tokens` / `completion_tokens` / `total_tokens` and total wall-time `elapsed_ms`. The dashboard ingests these records into SQLite for analytics.
+
 Use logs to build training data:
 
 ```bash

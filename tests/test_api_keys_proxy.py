@@ -645,3 +645,64 @@ class TestSuccessfulFailureHandling:
 
         assert isinstance(result, StreamingResponse)
         assert response._aiter_lines_called == 1
+
+    @pytest.mark.asyncio
+    async def test_streaming_multi_chunk_usage_logs_once(self):
+        """Multiple usage-bearing chunks produce exactly one log_execution_event call."""
+
+        class FakeStreamingResponse:
+            status_code = 200
+
+            def __init__(self, lines: list[str]):
+                self._lines = lines
+
+            async def aiter_lines(self):
+                for line in self._lines:
+                    yield line
+
+            async def aread(self):
+                return "\n".join(self._lines).encode()
+
+            async def aclose(self):
+                return None
+
+        chunks = [
+            'data: {"choices":[{"delta":{"content":"hel"}}],"usage":{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105}}',
+            'data: {"choices":[{"delta":{"content":"lo"}}],"usage":{"prompt_tokens":100,"completion_tokens":10,"total_tokens":110}}',
+            'data: {"choices":[{"delta":{"content":" world"}}],"usage":{"prompt_tokens":100,"completion_tokens":15,"total_tokens":115}}',
+            "data: [DONE]",
+            "",
+        ]
+        response = FakeStreamingResponse(chunks)
+
+        async def fake_send(*args, **kwargs):
+            _ = args, kwargs
+            return response
+
+        async with httpx.AsyncClient() as client:
+            with (
+                patch("kani.proxy._http", client),
+                patch.object(client, "send", side_effect=fake_send),
+                patch("kani.proxy.log_execution_event") as mock_log,
+            ):
+                result = await _proxy_upstream(
+                    "https://primary.example/v1",
+                    "primary-key",
+                    {
+                        "model": "model-primary",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "stream": True,
+                    },
+                    None,
+                )
+
+                assert isinstance(result, StreamingResponse)
+                # Consume the stream to trigger the finally block
+                async for _ in result.body_iterator:
+                    pass
+
+        # Exactly one log call with the final cumulative usage values
+        assert mock_log.call_count == 1
+        call_kwargs = mock_log.call_args.kwargs
+        assert call_kwargs["completion_tokens"] == 15
+        assert call_kwargs["prompt_tokens"] == 100

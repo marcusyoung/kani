@@ -726,6 +726,7 @@ async def _proxy_upstream(
                 break
 
             async def _stream():
+                last_usage: dict[str, Any] | None = None
                 try:
                     for line in buffered_lines:
                         yield f"{line}\n"
@@ -734,42 +735,33 @@ async def _proxy_upstream(
                                 chunk = json.loads(line[6:])
                                 usage = chunk.get("usage")
                                 if usage:
-                                    elapsed = (time.monotonic() - t0) * 1000
-                                    _log_usage(
-                                        model_name,
-                                        actual_provider,
-                                        usage,
-                                        profile,
-                                        elapsed,
-                                        decision=decision,
-                                        request_id=request_id,
-                                        compaction_result=compaction_result,
-                                    )
+                                    last_usage = usage
                             except (json.JSONDecodeError, TypeError):
                                 pass
                     async for line in line_iter:
                         yield f"{line}\n"
-                        # Parse usage from the final data chunk
                         if line.startswith("data: ") and line != "data: [DONE]":
                             try:
                                 chunk = json.loads(line[6:])
                                 usage = chunk.get("usage")
                                 if usage:
-                                    elapsed = (time.monotonic() - t0) * 1000
-                                    _log_usage(
-                                        model_name,
-                                        actual_provider,
-                                        usage,
-                                        profile,
-                                        elapsed,
-                                        decision=decision,
-                                        request_id=request_id,
-                                        compaction_result=compaction_result,
-                                    )
+                                    last_usage = usage
                             except (json.JSONDecodeError, TypeError):
                                 pass
                 finally:
                     await upstream.aclose()
+                    if last_usage is not None:
+                        elapsed = (time.monotonic() - t0) * 1000
+                        _log_usage(
+                            model_name,
+                            actual_provider,
+                            last_usage,
+                            profile,
+                            elapsed,
+                            decision=decision,
+                            request_id=request_id,
+                            compaction_result=compaction_result,
+                        )
 
             resp_headers = dict(extra_headers)
             resp_headers["Content-Type"] = "text/event-stream"

@@ -35,9 +35,9 @@ SEMANTIC_DIMENSION_CALIBRATION: dict[str, dict[str, str]] = {
         "high": "Requires deep reasoning such as proof, root-cause analysis, trade-off analysis, or multi-factor diagnosis.",
     },
     "technicalTerms": {
-        "low": "Uses general language with little or no software, API, config, or infrastructure terminology.",
-        "medium": "Includes a few technical terms or one concrete tool/API/configuration topic.",
-        "high": "Dense technical vocabulary across APIs, frameworks, configs, infrastructure, or ML/routing concepts.",
+        "low": "Uses general language with little or no specialised vocabulary.",
+        "medium": "Includes a few technical terms or one concrete topic from a technical or professional field.",
+        "high": "Dense specialised vocabulary from a technical, scientific, or professional domain.",
     },
     "creativeMarkers": {
         "low": "No request to draft, design, write creative copy, or generate narrative content.",
@@ -62,37 +62,37 @@ SEMANTIC_DIMENSION_CALIBRATION: dict[str, dict[str, str]] = {
     "imperativeVerbs": {
         "low": "No action command or only passive information-seeking wording.",
         "medium": "One clear action verb such as add, update, check, run, summarize, or explain.",
-        "high": "Multiple action commands or direct instructions to implement, fix, test, investigate, and verify.",
+        "high": "Multiple action commands or direct instructions to implement, fix, test, investigate, verify, or to search, gather, retrieve, compare, evaluate, and synthesise across sources.",
     },
     "constraintCount": {
         "low": "No explicit constraints, prohibitions, required formats, or must/never conditions.",
         "medium": "One or two constraints such as required output, scope, or forbidden behavior.",
-        "high": "Several strict constraints, acceptance criteria, forbidden actions, or compliance requirements.",
+        "high": "Several strict constraints, acceptance criteria, forbidden actions, compliance requirements, or output-style rules such as citation format, source requirements, or evidence standards.",
     },
     "outputFormat": {
         "low": "No requested structure or format.",
-        "medium": "Requests a common format such as JSON, markdown, table, list, or concise bullets.",
-        "high": "Requires an exact schema, machine-readable shape, strict keys, or multiple formatting rules.",
+        "medium": "Requests a common format such as JSON, markdown, table, list, or concise bullets, or a structured research output such as a report, summary, or citation list.",
+        "high": "Requires an exact schema, machine-readable shape, strict keys, multiple formatting rules, or a precise citation/reporting structure.",
     },
     "referenceComplexity": {
         "low": "No external references, file paths, URLs, logs, or prior artifacts.",
-        "medium": "One or two references such as a URL, file path, issue, config, or log snippet.",
-        "high": "Several references or requires cross-reading files, URLs, logs, specs, or previous context.",
+        "medium": "One or two references such as a URL, file path, issue, config, log snippet, or external document.",
+        "high": "Several references or requires cross-reading files, URLs, logs, specs, previous context, external documents, or multiple sources.",
     },
     "negationComplexity": {
         "low": "No negation, exception, or forbidden behavior.",
         "medium": "One explicit not/without/never condition or simple exception.",
-        "high": "Multiple prohibitions, nuanced exceptions, or safety constraints that affect execution.",
+        "high": "Multiple prohibitions, nuanced exceptions, safety constraints that affect execution, or methodological constraints that affect accuracy or output.",
     },
     "domainSpecificity": {
-        "low": "General-purpose request that does not depend on a specialized domain.",
-        "medium": "Depends on one recognizable domain such as Python, CLI routing, config, or testing.",
-        "high": "Requires specialized project/domain knowledge across routing, providers, proxy behavior, or ML features.",
+        "low": "General-purpose request that does not depend on a specialised domain.",
+        "medium": "Depends on one recognisable technical, scientific, or professional domain.",
+        "high": "Requires deep specialised knowledge of a domain with its own terminology, conventions, and source conventions.",
     },
     "agenticTask": {
         "low": "Only asks for an answer or explanation; no tool use, repository change, or verification expected.",
-        "medium": "Asks the assistant to perform a bounded action such as inspect, run, update, or produce an artifact.",
-        "high": "Requires autonomous implementation, debugging, multi-step tool use, verification, or repository modification.",
+        "medium": "Asks the assistant to perform a bounded action such as inspect, run, update, produce an artifact, or a bounded research action like search, retrieve, or summarise a single source.",
+        "high": "Requires autonomous implementation, debugging, multi-step tool use, verification, or repository modification, or autonomous multi-source investigation with evidence gathering, cross-referencing, and structured synthesis.",
     },
 }
 

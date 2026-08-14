@@ -249,9 +249,14 @@ model_rules:
     capabilities: [vision, tools, json_mode]
   - prefix: "gpt-4"
     capabilities: [vision, tools, json_mode]
+  - prefix: "moonshotai/kimi-k3"
+    provider: "doubleword"
+    capabilities: [tools, json_mode]
+    extra_body:
+      service_tier: flex   # inject extra request-body fields for this model
 ```
 
-`model_rules` is the primary metadata key. The legacy `model_capabilities` key is accepted only when `model_rules` is unset.
+`model_rules` is the primary metadata key. The legacy `model_capabilities` key is accepted only when `model_rules` is unset. The optional `extra_body` field injects extra request-body fields for any candidate matching the rule (e.g. `service_tier: flex` for Doubleword async); it uses the same prefix/provider precedence as `reasoning_style` and is merged last, so its values win over client-provided fields.
 
 ## API endpoints
 

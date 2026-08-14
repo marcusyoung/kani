@@ -707,6 +707,139 @@ class TestReasoningContentCompatibility:
         assert with_metadata.tier == without_metadata.tier
 
 
+class TestModelExtraBody:
+    """Per-model extra_body injection via model_rules."""
+
+    def _state(self, model_rules: list[ModelRuleEntry]) -> RuntimeState:
+        cfg = KaniConfig(
+            providers={
+                "doubleword": ProviderConfig(
+                    name="doubleword",
+                    base_url="https://api.doubleword.ai/v1",
+                ),
+            },
+            model_rules=model_rules,
+        )
+        return RuntimeState(
+            config_path=None,
+            config=cfg,
+            router=Router(cfg),
+            fallback_backoff_state=Router(cfg).fallback_backoff_state,
+            config_loaded_at="test",
+            version=1,
+        )
+
+    def test_extra_body_merged_into_prepared_body(self):
+        state = self._state(
+            [
+                ModelRuleEntry(
+                    prefix="moonshotai/kimi-k3",
+                    provider="doubleword",
+                    extra_body={"service_tier": "flex"},
+                ),
+            ]
+        )
+        body: dict[str, Any] = {
+            "model": "moonshotai/kimi-k3",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        prepared = proxy_mod._prepare_body_for_candidate(
+            body, "moonshotai/kimi-k3", "doubleword", state
+        )
+
+        assert prepared["service_tier"] == "flex"
+        assert prepared["model"] == "moonshotai/kimi-k3"
+
+    def test_extra_body_wins_over_client_field(self):
+        state = self._state(
+            [
+                ModelRuleEntry(
+                    prefix="moonshotai/kimi-k3",
+                    provider="doubleword",
+                    extra_body={"service_tier": "flex"},
+                ),
+            ]
+        )
+        body: dict[str, Any] = {
+            "model": "moonshotai/kimi-k3",
+            "service_tier": "realtime",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        prepared = proxy_mod._prepare_body_for_candidate(
+            body, "moonshotai/kimi-k3", "doubleword", state
+        )
+
+        assert prepared["service_tier"] == "flex"
+
+    def test_no_extra_body_when_rule_has_none(self):
+        state = self._state(
+            [
+                ModelRuleEntry(
+                    prefix="zai-org/GLM-5.2-FP8",
+                    provider="doubleword",
+                ),
+            ]
+        )
+        body: dict[str, Any] = {
+            "model": "zai-org/GLM-5.2-FP8",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        prepared = proxy_mod._prepare_body_for_candidate(
+            body, "zai-org/GLM-5.2-FP8", "doubleword", state
+        )
+
+        assert "service_tier" not in prepared
+
+    def test_extra_body_not_applied_to_other_provider(self):
+        state = self._state(
+            [
+                ModelRuleEntry(
+                    prefix="moonshotai/kimi-k3",
+                    provider="doubleword",
+                    extra_body={"service_tier": "flex"},
+                ),
+            ]
+        )
+        body: dict[str, Any] = {
+            "model": "moonshotai/kimi-k3",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        prepared = proxy_mod._prepare_body_for_candidate(
+            body, "moonshotai/kimi-k3", "sference", state
+        )
+
+        assert "service_tier" not in prepared
+
+    def test_provider_specific_rule_outranks_provider_agnostic(self):
+        state = self._state(
+            [
+                ModelRuleEntry(
+                    prefix="moonshotai/kimi-k3",
+                    extra_body={"service_tier": "realtime"},
+                ),
+                ModelRuleEntry(
+                    prefix="moonshotai/kimi-k3",
+                    provider="doubleword",
+                    extra_body={"service_tier": "flex"},
+                ),
+            ]
+        )
+        body: dict[str, Any] = {
+            "model": "moonshotai/kimi-k3",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        prepared = proxy_mod._prepare_body_for_candidate(
+            body, "moonshotai/kimi-k3", "doubleword", state
+        )
+
+        assert prepared["service_tier"] == "flex"
+
+
 class TestAdminReloadAuth:
     def test_reload_rejected_without_token(self, configured_proxy):
         with TestClient(app, raise_server_exceptions=False) as client:

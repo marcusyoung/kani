@@ -246,7 +246,7 @@ YAML 設定ファイルの読み込み、環境変数プレースホルダーの
 
 #### Scenario: model_rules primary metadata
 
-- GIVEN `model_rules` に prefix, capabilities, reasoning_style, provider filter が設定されている
+- GIVEN `model_rules` に prefix, capabilities, reasoning_style, provider filter, extra_body が設定されている
 - WHEN 設定を読み込む
 - THEN システムは `model_rules` をモデルメタデータ規則として保持する
 - AND capability filtering と reasoning_style override は `model_rules` を参照する
@@ -350,13 +350,21 @@ LLM 分類器の設定はオプショナルで、API キーは複数のソース
 
 ### Requirement: Model metadata documentation
 
-`model_rules` is the primary configuration surface for prefix-based model metadata. The `supports_reasoning_content` field in each entry uses the same prefix/provider scoring precedence as `reasoning_style`: provider-matching rules always take priority over provider-agnostic rules, even when the provider-agnostic rule has a longer prefix.
+`model_rules` is the primary configuration surface for prefix-based model metadata. The `supports_reasoning_content` field in each entry uses the same prefix/provider scoring precedence as `reasoning_style`: provider-matching rules always take priority over provider-agnostic rules, even when the provider-agnostic rule has a longer prefix. The optional `extra_body` field injects extra request-body fields for any candidate matching the rule (e.g. `{"service_tier": "flex"}`); it uses the same prefix/provider scoring precedence and is merged into the upstream payload last, so its values win over client-provided fields.
 
 #### Scenario: Model rule precedence is documented
 
 **Given** an operator reads `model_rules` documentation or the relevant function docstring
 **When** kani resolves `supports_reasoning_content`
 **Then** the precedence (provider-match > prefix length) is clearly described so the operator can configure rules with confidence
+
+#### Scenario: extra_body is injected for matching candidates
+
+**Given** a `model_rules` entry with `extra_body` matches a routed candidate
+**When** kani builds the upstream payload for that candidate
+**Then** kani MUST merge the entry's `extra_body` fields into the upstream payload
+**And** kani MUST apply the same prefix/provider scoring precedence as `reasoning_style`
+**And** kani MUST NOT inject `extra_body` for candidates that do not match the rule
 
 ### Requirement: Doctor command provides safe operational diagnostics
 

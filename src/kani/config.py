@@ -364,6 +364,14 @@ class ModelRuleEntry(BaseModel):
     ) = None
     supports_reasoning_content: bool | None = None
     content_part_policy: ContentPartPolicy | None = None
+    extra_body: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Optional extra request-body fields injected for any candidate "
+            "matching this rule (e.g. {'service_tier': 'flex'}). Merged last, "
+            "so these values win over client-provided fields."
+        ),
+    )
 
 
 ModelCapabilityEntry = ModelRuleEntry

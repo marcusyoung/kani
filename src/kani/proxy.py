@@ -1116,6 +1116,34 @@ def _get_reasoning_style_for_candidate(
     ) or _get_provider_reasoning_style(provider_name, runtime)
 
 
+def _get_model_extra_body(
+    model: str, provider_name: str, runtime: RuntimeState
+) -> dict[str, Any] | None:
+    """Return the best-matching model rule's extra_body, or None.
+
+    Uses the same prefix/provider scoring as reasoning_style: provider-specific
+    rules outrank provider-agnostic rules before prefix specificity is compared.
+    """
+    best_extra: dict[str, Any] | None = None
+    best_score: tuple[int, int] = (-1, -1)
+    for entry in runtime.config.model_rules:
+        prefix_matches = entry.prefix == "*" or model.startswith(entry.prefix)
+        if not prefix_matches:
+            continue
+        if entry.provider and entry.provider != provider_name:
+            continue
+        if not entry.extra_body:
+            continue
+        score = (
+            1 if entry.provider else 0,
+            0 if entry.prefix == "*" else len(entry.prefix),
+        )
+        if score > best_score:
+            best_score = score
+            best_extra = entry.extra_body
+    return best_extra
+
+
 def _get_model_content_part_policy(
     model: str, provider_name: str, runtime: RuntimeState
 ) -> ContentPartPolicy | None:
@@ -1332,9 +1360,19 @@ def _prepare_body_for_candidate(
     prepared = _sanitize_reasoning_content_for_candidate(
         body, model, provider_name, runtime
     )
-    return _normalize_message_content_for_candidate(
+    prepared = _normalize_message_content_for_candidate(
         prepared, model, provider_name, runtime
     )
+    extra_body = _get_model_extra_body(model, provider_name, runtime)
+    if extra_body:
+        prepared = {**prepared, **extra_body}
+        logger.info(
+            "EXTRA_BODY model=%s provider=%s extra_body=%s",
+            model,
+            provider_name,
+            json.dumps(extra_body, sort_keys=True),
+        )
+    return prepared
 
 
 def _has_explicit_reasoning_control(body: dict[str, Any]) -> bool:

@@ -309,6 +309,16 @@ Routed chat completion requests SHOULD receive provider-specific reasoning contr
 **Then**: kani MUST apply the fallback provider's `reasoning_style`
 **And**: kani MUST NOT reuse stale primary-provider reasoning controls that conflict with the fallback provider style
 
+#### Scenario: model_rules extra_body is injected into the upstream payload
+
+**Given**: a routed request selects a candidate matching a `model_rules` entry with `extra_body`
+**When**: kani proxies the request upstream
+**Then**: kani MUST merge the entry's `extra_body` fields into the upstream payload
+**And**: kani MUST apply the same prefix/provider scoring precedence as `reasoning_style`
+**And**: kani MUST NOT inject `extra_body` for candidates that do not match the rule
+**And**: kani MUST apply the fallback candidate's own `extra_body` when a fallback is used
+**And**: kani MUST log the injected fields to stderr as `EXTRA_BODY model=... provider=... extra_body={...}`
+
 ### Requirement: Reasoning message-field compatibility for routed requests
 
 For routed chat completion requests, kani MUST adapt explicitly covered message-level reasoning metadata fields, starting with `messages[].reasoning_content`, to the selected upstream provider/model before proxying the request. Compatibility lookup MUST be explicit and fail closed when neither a model rule nor provider config declares support. Model-rule precedence MUST be documented as provider-match first, then prefix specificity, matching the current reasoning-style precedence model.

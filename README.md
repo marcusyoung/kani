@@ -132,6 +132,66 @@ response = client.chat.completions.create(
 
 Any tool or library that supports the OpenAI API works with kani: LangChain, LlamaIndex, Cursor, Continue, and similar clients.
 
+## Per-turn tier override
+
+Force the routing tier for a single request by starting the latest user message with `/kani:<tier>`. The token is stripped before forwarding upstream so the model never sees it.
+
+**Syntax**: `/kani:<tier>` at the start of the latest user message (position 0).
+
+**Valid tiers** (case-insensitive): `simple`, `medium`, `complex`, `reasoning`.
+
+When a valid override is present, kani skips the scorer and pins the tier. Capability filtering, input-limit checks, and tier fallback still apply. If the pinned tier is not defined in the profile, kani falls back to an adjacent tier as usual.
+
+Invalid tier values (e.g. `/kani:foo`) do not crash routing: the token is still stripped, a warning is logged, and normal scoring runs. Only the latest user message is scanned; tokens in assistant, system, or earlier user messages are ignored.
+
+### Example: curl
+
+```bash
+curl http://localhost:18420/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "kani/auto",
+    "messages": [
+      {"role": "user", "content": "/kani:reasoning prove P != NP"}
+    ]
+  }'
+```
+
+The upstream provider receives `prove P != NP` (the token is stripped) and kani routes to the `REASONING` tier model.
+
+### Example: Python client
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:18420/v1",
+    api_key="kani-local-dev",
+)
+
+response = client.chat.completions.create(
+    model="kani/auto",
+    messages=[{"role": "user", "content": "/kani:simple what is 2+2"}],
+)
+```
+
+### Debug with /v1/route
+
+Check the override without proxying upstream:
+
+```bash
+curl http://localhost:18420/v1/route \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "kani/auto",
+    "messages": [
+      {"role": "user", "content": "/kani:complex write a merge sort"}
+    ]
+  }'
+```
+
+The response includes `tier: COMPLEX` and `tier_override: "COMPLEX"`.
+
 ## API keys
 
 kani uses two different kinds of keys:

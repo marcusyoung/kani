@@ -2261,7 +2261,7 @@ async def route_debug(request: Request):
     if not all(isinstance(message, dict) for message in messages):
         return _openai_error(400, "messages must contain only objects")
     profile = body.get("profile", None)
-    tier_override, _ = parse_tier_override(messages)
+    tier_override, stripped_messages = parse_tier_override(messages)
     tools_capability_decision = _decide_tools_capability(
         body,
         state.config.smart_proxy.tools_capability_detection,
@@ -2273,7 +2273,7 @@ async def route_debug(request: Request):
 
     try:
         decision = state.router.route(
-            messages,
+            stripped_messages,
             profile=profile,
             required_capabilities=required_capabilities,
             tier_override=tier_override,

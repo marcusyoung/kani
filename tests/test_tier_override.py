@@ -451,3 +451,25 @@ profiles:
         assert resp.status_code == 200
         payload = resp.json()
         assert payload["tier_override"] is None
+
+    def test_route_debug_routes_with_stripped_messages(self, proxy_client) -> None:
+        """route_debug routes with the token stripped (parity with chat endpoint)."""
+        import kani.proxy as proxy_mod
+
+        client, _ = proxy_client
+        state = proxy_mod._require_runtime_state()
+        route_spy = MagicMock(wraps=state.router.route)
+        with patch.object(state.router, "route", new=route_spy):
+            resp = client.post(
+                "/v1/route",
+                json={
+                    "messages": [{"role": "user", "content": "/kani:foo hello world"}]
+                },
+            )
+        assert resp.status_code == 200
+        routed_messages = route_spy.call_args.args[0]
+        contents = [m["content"] for m in routed_messages]
+        assert contents == ["hello world"]
+        # /kani:foo is an invalid tier, so the scorer runs on stripped content
+        payload = resp.json()
+        assert payload["tier_override"] is None

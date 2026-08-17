@@ -62,6 +62,7 @@ from kani.router import (
     InputLimitNotSatisfiedError,
     Router,
     RoutingDecision,
+    parse_tier_override,
 )
 
 logger = logging.getLogger("kani.proxy")
@@ -1899,12 +1900,27 @@ async def chat_completions(request: Request):
         # Extract session key for session-sticky primary selection
         session_key = request.headers.get(state.config.routing.session_header)
 
+        # Strip a per-turn /kani:<tier> override token from the latest user
+        # message before compaction/routing so it never leaks upstream.
+        tier_override, stripped_messages = parse_tier_override(messages)
+        if tier_override is not None or stripped_messages is not messages:
+            body = dict(body)
+            body["messages"] = stripped_messages
+            messages = stripped_messages
+        if tier_override is not None:
+            logger.info(
+                "TIER_OVERRIDE request_id=%s tier_override=%s",
+                request_id,
+                tier_override,
+            )
+
         try:
             decision: RoutingDecision = state.router.route(
                 messages,
                 profile=profile_name,
                 required_capabilities=required_capabilities,
                 session_key=session_key,
+                tier_override=tier_override,
             )
         except CapabilityNotSatisfiedError:
             logger.warning(
@@ -2245,6 +2261,7 @@ async def route_debug(request: Request):
     if not all(isinstance(message, dict) for message in messages):
         return _openai_error(400, "messages must contain only objects")
     profile = body.get("profile", None)
+    tier_override, stripped_messages = parse_tier_override(messages)
     tools_capability_decision = _decide_tools_capability(
         body,
         state.config.smart_proxy.tools_capability_detection,
@@ -2256,9 +2273,10 @@ async def route_debug(request: Request):
 
     try:
         decision = state.router.route(
-            messages,
+            stripped_messages,
             profile=profile,
             required_capabilities=required_capabilities,
+            tier_override=tier_override,
         )
     except CapabilityNotSatisfiedError:
         logger.warning(
@@ -2296,6 +2314,7 @@ async def route_debug(request: Request):
     )
 
     payload = decision.model_dump()
+    payload["tier_override"] = tier_override
     payload["tools_capability_detection"] = {
         "policy": tools_capability_decision.policy,
         "declared": tools_capability_decision.declared,

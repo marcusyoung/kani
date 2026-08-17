@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from threading import Lock
 from typing import Any
 
@@ -96,6 +97,81 @@ def _session_hash(session_key: str) -> int:
     return int.from_bytes(hashlib.sha256(session_key.encode()).digest()[:8], "big")
 
 
+# Per-turn tier override token, e.g. "/kani:reasoning" (decision record doc-2)
+_TIER_OVERRIDE_PATTERN = re.compile(r"^/kani:(\w+)\s*")
+
+
+def parse_tier_override(
+    messages: list[dict[str, Any]],
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """Extract and strip a tier override token from the latest user message.
+
+    Only the latest user message is scanned (history, assistant, and system
+    messages are ignored). The token must be at position 0 of the content;
+    for list content, only the first ``{"type": "text", "text": ...}`` part
+    is checked. Tier names are matched case-insensitively against
+    ``_TIER_ORDER``.
+
+    Returns:
+        ``(tier_override, stripped_messages)`` where ``tier_override`` is the
+        upper-cased tier name for a valid token, or ``None`` for an invalid or
+        absent token. When a token is found (valid or not), the returned
+        message list is a shallow copy in which only the latest user message
+        dict is deep-copied with the token and leading whitespace removed.
+        When no token is found, the original list is returned unchanged.
+    """
+    for idx in range(len(messages) - 1, -1, -1):
+        message = messages[idx]
+        if message.get("role") != "user":
+            continue
+
+        content = message.get("content")
+        new_message: dict[str, Any] | None = None
+        tier_name: str | None = None
+
+        if isinstance(content, str):
+            match = _TIER_OVERRIDE_PATTERN.match(content)
+            if match is not None:
+                tier_name = match.group(1)
+                new_message = dict(message)
+                new_message["content"] = content[match.end() :]
+        elif isinstance(content, list):
+            # Only the first text part is eligible (decision record doc-2)
+            for part_idx, part in enumerate(content):
+                if not (isinstance(part, dict) and part.get("type") == "text"):
+                    continue
+                text = part.get("text")
+                if isinstance(text, str):
+                    match = _TIER_OVERRIDE_PATTERN.match(text)
+                    if match is not None:
+                        tier_name = match.group(1)
+                        new_content = list(content)
+                        new_part = dict(part)
+                        new_part["text"] = text[match.end() :]
+                        new_content[part_idx] = new_part
+                        new_message = dict(message)
+                        new_message["content"] = new_content
+                break
+
+        if tier_name is None or new_message is None:
+            return None, messages
+
+        stripped_messages = list(messages)
+        stripped_messages[idx] = new_message
+
+        tier_override = tier_name.upper()
+        if tier_override not in _TIER_ORDER:
+            log.warning(
+                "Invalid tier override %r in latest user message; "
+                "token stripped, falling back to normal scoring",
+                tier_name,
+            )
+            return None, stripped_messages
+        return tier_override, stripped_messages
+
+    return None, messages
+
+
 class Router:
     """Given chat messages, decides which model and provider to use."""
 
@@ -124,6 +200,7 @@ class Router:
         model: str | None = None,
         required_capabilities: set[str] | None = None,
         session_key: str | None = None,
+        tier_override: str | None = None,
     ) -> RoutingDecision:
         """Route a chat request to the right model+provider.
 
@@ -134,6 +211,8 @@ class Router:
                    or an explicit model ID to pass through.
             required_capabilities: Set of required capabilities (e.g., {'vision', 'tools', 'json_mode'}).
             session_key: Optional session key for session-sticky primary selection.
+            tier_override: If set to a valid tier (SIMPLE/MEDIUM/COMPLEX/REASONING,
+                   case-insensitive), skips the scorer and pins the tier.
 
         Returns:
             A RoutingDecision with all the info needed to proxy the request.
@@ -166,42 +245,63 @@ class Router:
         # --- Build classification input from conversation context ---
         classification_input = build_classification_input(messages)
 
-        # --- Run scorer ---
-        classification = self._classify(
-            classification_input=classification_input,
-            messages=messages,
-            profile=profile,
-        )
+        # --- Resolve tier: valid override pins the tier and skips the scorer ---
+        score: float
+        confidence: float
+        signals: list[str]
+        signal_details: dict[str, Any] | list[str]
+        agentic_score: float
 
-        tier = str(classification.get("tier") or _DEFAULT_TIER)
-        if tier not in _TIER_ORDER:
-            log.warning(
-                "Invalid scorer tier %r, falling back to %s", tier, _DEFAULT_TIER
+        if tier_override is not None and tier_override.upper() in _TIER_ORDER:
+            tier = tier_override.upper()
+            score = 1.0
+            confidence = 1.0
+            signals = ["tier_override"]
+            signal_details = list(signals)
+            agentic_score = 0.0
+        else:
+            if tier_override is not None:
+                log.warning(
+                    "Invalid tier_override %r, falling back to normal scoring",
+                    tier_override,
+                )
+
+            # --- Run scorer ---
+            classification = self._classify(
+                classification_input=classification_input,
+                messages=messages,
+                profile=profile,
             )
-            tier = _DEFAULT_TIER
-        score = self._coerce_probability(classification.get("score", 0.5), 0.5)
-        confidence = self._coerce_probability(
-            classification.get("confidence", 0.5), 0.5
-        )
-        raw_signals = classification.get("signals", [])
-        signals = (
-            [str(signal) for signal in raw_signals]
-            if isinstance(raw_signals, list)
-            else []
-        )
-        raw_signal_details = classification.get("signal_details", signals)
-        signal_details: dict[str, Any] | list[str] = (
-            raw_signal_details
-            if isinstance(raw_signal_details, dict | list)
-            else signals
-        )
-        agentic_score = self._coerce_probability(
-            classification.get("agentic_score", 0.0), 0.0
-        )
 
-        # --- Override tier for agentic profile if agentic_score is high ---
-        if profile == "agentic" and agentic_score > 0.6 and tier == "SIMPLE":
-            tier = "MEDIUM"
+            tier = str(classification.get("tier") or _DEFAULT_TIER)
+            if tier not in _TIER_ORDER:
+                log.warning(
+                    "Invalid scorer tier %r, falling back to %s", tier, _DEFAULT_TIER
+                )
+                tier = _DEFAULT_TIER
+            score = self._coerce_probability(classification.get("score", 0.5), 0.5)
+            confidence = self._coerce_probability(
+                classification.get("confidence", 0.5), 0.5
+            )
+            raw_signals = classification.get("signals", [])
+            signals = (
+                [str(signal) for signal in raw_signals]
+                if isinstance(raw_signals, list)
+                else []
+            )
+            raw_signal_details = classification.get("signal_details", signals)
+            signal_details = (
+                raw_signal_details
+                if isinstance(raw_signal_details, dict | list)
+                else signals
+            )
+            agentic_score = self._coerce_probability(
+                classification.get("agentic_score", 0.0), 0.0
+            )
+
+            # --- Override tier for agentic profile if agentic_score is high ---
+            if profile == "agentic" and agentic_score > 0.6 and tier == "SIMPLE":
+                tier = "MEDIUM"
 
         # --- Look up model in profile tier config with capability/input-limit filtering ---
         resolved_tier, tier_cfg = self._resolve_tier_config(profile_cfg, tier)

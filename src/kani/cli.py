@@ -284,7 +284,7 @@ def serve(config_path: str | None, host: str | None, port: int | None):
 def route_cmd(prompt: str, config_path: str | None, profile: str | None):
     """Classify a prompt and show the routing decision."""
     from kani.config import load_config
-    from kani.router import Router
+    from kani.router import Router, parse_tier_override
 
     try:
         cfg = load_config(config_path, strict=True)
@@ -294,7 +294,10 @@ def route_cmd(prompt: str, config_path: str | None, profile: str | None):
     router = Router(cfg)
 
     messages = [{"role": "user", "content": prompt}]
-    decision = router.route(messages, profile=profile)
+    tier_override, stripped_messages = parse_tier_override(messages)
+    decision = router.route(
+        stripped_messages, profile=profile, tier_override=tier_override
+    )
     safe_decision = _mask_keys_in_decision(decision.model_dump())
 
     click.echo(json.dumps(safe_decision, indent=2))

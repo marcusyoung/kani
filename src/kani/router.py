@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import logging
 import re
@@ -134,7 +133,7 @@ def parse_tier_override(
             match = _TIER_OVERRIDE_PATTERN.match(content)
             if match is not None:
                 tier_name = match.group(1)
-                new_message = copy.deepcopy(message)
+                new_message = dict(message)
                 new_message["content"] = content[match.end() :]
         elif isinstance(content, list):
             # Only the first text part is eligible (decision record doc-2)
@@ -146,8 +145,12 @@ def parse_tier_override(
                     match = _TIER_OVERRIDE_PATTERN.match(text)
                     if match is not None:
                         tier_name = match.group(1)
-                        new_message = copy.deepcopy(message)
-                        new_message["content"][part_idx]["text"] = text[match.end() :]
+                        new_content = list(content)
+                        new_part = dict(part)
+                        new_part["text"] = text[match.end() :]
+                        new_content[part_idx] = new_part
+                        new_message = dict(message)
+                        new_message["content"] = new_content
                 break
 
         if tier_name is None or new_message is None:

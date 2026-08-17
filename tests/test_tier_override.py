@@ -180,7 +180,7 @@ class TestRouterTierOverride:
     def test_override_skips_scorer(self) -> None:
         """A valid override means _classify is never called."""
         router = Router(_make_config())
-        with patch.object(Router, "_classify", new=MagicMock()) as mock_classify:
+        with patch.object(Router, "_classify") as mock_classify:
             decision = router.route(
                 [{"role": "user", "content": "anything"}],
                 profile="auto",
@@ -196,7 +196,18 @@ class TestRouterTierOverride:
         """An invalid override logs a warning and runs normal scoring."""
         router = Router(_make_config())
         with (
-            patch.object(Router, "_classify", new=MagicMock()) as mock_classify,
+            patch.object(
+                Router,
+                "_classify",
+                return_value={
+                    "tier": "MEDIUM",
+                    "score": 0.3,
+                    "confidence": 0.5,
+                    "signals": {"method": "default"},
+                    "agentic_score": 0.0,
+                    "dimensions": [],
+                },
+            ) as mock_classify,
             patch("kani.router.log.warning") as mock_warning,
         ):
             router.route(

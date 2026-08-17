@@ -1,0 +1,47 @@
+{
+  "mcpServers": {
+    "backlog": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "C:\\Users\\myoun\\AppData\\Roaming\\npm\\backlog.cmd",
+        "mcp",
+        "start",
+        "--cwd",
+        "C:\\Users\\myoun\\.config\\kani\\kani-repo"
+      ]
+    },
+    "codebase-memory-mcp": {
+      "command": "codebase-memory-mcp.exe"
+    },
+    "docs": {
+      "url": "https://docs-mcp.int2.uk/mcp"
+    },
+    "project-knowledge": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://connapse.int2.uk/mcp",
+        "--header",
+        "X-Api-Key: cnp_hvxjkrR-GOpL1LAL_XVsVoQZ99W8vPuSA1S4oP7JOFk",
+        "--transport",
+        "http-only"
+      ]
+    },
+    "obsidian": {
+      "command": "bun",
+      "args": [
+        "run",
+        "C:\\Users\\myoun\\.bun\\bin\\mcpvault",
+        "C:\\Users\\myoun\\Obsidian"
+      ]
+    },
+    "context7": {
+      "url": "https://mcp.context7.com/mcp",
+      "headers": {
+        "CONTEXT7_API_KEY": "ctx7sk-8d866baf-2bea-48d7-b560-ffd4fa431fd8"
+      }
+    }
+  }
+}

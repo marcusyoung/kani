@@ -581,3 +581,23 @@ profiles:
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
         assert data["tier"] in {"SIMPLE", "MEDIUM", "COMPLEX", "REASONING"}
+
+    def test_route_routes_with_stripped_messages(self, runner, config_path) -> None:
+        """route_cmd() routes on stripped messages so invalid tokens don't pollute the scorer."""
+        from kani.cli import main
+        from kani.config import load_config
+        from kani.router import Router
+
+        cfg = load_config(str(config_path), strict=True)
+        router = Router(cfg)
+        route_spy = MagicMock(wraps=router.route)
+        with patch("kani.router.Router", return_value=router):
+            with patch.object(router, "route", new=route_spy):
+                result = runner.invoke(
+                    main,
+                    ["route", "/kani:foo hello world", "--config", str(config_path)],
+                )
+        assert result.exit_code == 0, result.output
+        routed_messages = route_spy.call_args.args[0]
+        contents = [m["content"] for m in routed_messages]
+        assert contents == ["hello world"]

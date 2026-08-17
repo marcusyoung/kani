@@ -294,8 +294,10 @@ def route_cmd(prompt: str, config_path: str | None, profile: str | None):
     router = Router(cfg)
 
     messages = [{"role": "user", "content": prompt}]
-    tier_override, _stripped = parse_tier_override(messages)
-    decision = router.route(messages, profile=profile, tier_override=tier_override)
+    tier_override, stripped_messages = parse_tier_override(messages)
+    decision = router.route(
+        stripped_messages, profile=profile, tier_override=tier_override
+    )
     safe_decision = _mask_keys_in_decision(decision.model_dump())
 
     click.echo(json.dumps(safe_decision, indent=2))

@@ -473,3 +473,111 @@ profiles:
         # /kani:foo is an invalid tier, so the scorer runs on stripped content
         payload = resp.json()
         assert payload["tier_override"] is None
+
+
+class TestCliTierOverride:
+    """CLI integration tests for the tier override in `kani route`."""
+
+    _CONFIG_YAML = """\
+default_provider: dummy
+default_profile: auto
+providers:
+  dummy:
+    name: dummy
+    base_url: "http://localhost:9999/v1"
+    api_key: "fake"
+profiles:
+  auto:
+    tiers:
+      SIMPLE: {primary: "simple-model"}
+      MEDIUM: {primary: "medium-model"}
+      COMPLEX: {primary: "complex-model"}
+      REASONING: {primary: "reasoning-model"}
+"""
+
+    @pytest.fixture()
+    def config_path(self, tmp_path):
+        """Write a minimal config and return its path."""
+        path = tmp_path / "config.yaml"
+        path.write_text(self._CONFIG_YAML)
+        return path
+
+    @pytest.fixture()
+    def runner(self):
+        from click.testing import CliRunner
+
+        return CliRunner()
+
+    def test_route_calls_parse_tier_override(self, runner, config_path) -> None:
+        """route_cmd() calls parse_tier_override on the messages list (AC #1)."""
+        from kani.cli import main
+
+        with patch("kani.router.parse_tier_override", wraps=parse_tier_override) as spy:
+            result = runner.invoke(
+                main, ["route", "hello", "--config", str(config_path)]
+            )
+        assert result.exit_code == 0, result.output
+        spy.assert_called_once()
+
+    def test_route_passes_tier_override_to_router(self, runner, config_path) -> None:
+        """route_cmd() passes tier_override to router.route() (AC #2)."""
+        from kani.cli import main
+        from kani.config import load_config
+        from kani.router import Router
+
+        cfg = load_config(str(config_path), strict=True)
+        router = Router(cfg)
+        route_spy = MagicMock(wraps=router.route)
+        with patch("kani.router.Router", return_value=router):
+            with patch.object(router, "route", new=route_spy):
+                result = runner.invoke(
+                    main,
+                    ["route", "/kani:reasoning hi", "--config", str(config_path)],
+                )
+        assert result.exit_code == 0, result.output
+        assert route_spy.call_args.kwargs.get("tier_override") == "REASONING"
+
+    @pytest.mark.parametrize("tier", ["REASONING", "SIMPLE"])
+    def test_override_shows_tier_in_output(
+        self, runner, config_path, tier: str
+    ) -> None:
+        """A /kani:<tier> prompt shows the overridden tier in the JSON output (ACs #3/#4)."""
+        import json
+
+        from kani.cli import main
+
+        result = runner.invoke(
+            main,
+            ["route", f"/kani:{tier} explain something", "--config", str(config_path)],
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["tier"] == tier
+
+    def test_invalid_tier_falls_through_to_normal_scoring(
+        self, runner, config_path
+    ) -> None:
+        """An invalid /kani:foo prompt falls through to normal scoring (AC #5)."""
+        import json
+
+        from kani.cli import main
+
+        result = runner.invoke(
+            main, ["route", "/kani:foo hello", "--config", str(config_path)]
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["tier"] in {"SIMPLE", "MEDIUM", "COMPLEX", "REASONING"}
+
+    def test_no_prefix_routes_normally(self, runner, config_path) -> None:
+        """A prompt without /kani: prefix routes normally (AC #6)."""
+        import json
+
+        from kani.cli import main
+
+        result = runner.invoke(
+            main, ["route", "hello world", "--config", str(config_path)]
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["tier"] in {"SIMPLE", "MEDIUM", "COMPLEX", "REASONING"}
